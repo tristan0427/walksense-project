@@ -1,0 +1,11 @@
+{
+  "appId": "com.walksense.app",
+  "appName": "Walksense",
+  "webDir": "dist",
+  "server": {
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true
+  }
+}
