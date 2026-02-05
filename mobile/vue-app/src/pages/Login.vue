@@ -17,8 +17,8 @@ const errorMessage = ref('')
 const showPassword = ref(false)
 
 // Configure axios base URL
-// axios.defaults.baseURL = 'http://172.23.172.98:8000'
-axios.defaults.baseURL = 'http://192.168.1.7:8000'
+axios.defaults.baseURL = 'http://172.23.172.98:8000'
+// axios.defaults.baseURL = 'http://192.168.254.125:8000'
 axios.defaults.headers.common['Accept'] = 'application/json'
 axios.defaults.headers.common['Content-Type'] = 'application/json'
 

@@ -2,6 +2,18 @@
   "appId": "com.walksense.app",
   "appName": "Walksense",
   "webDir": "dist",
+  "plugin": {
+    "Geolocation": {
+      "enableHighAccuracy": true
+    },
+    "BackgroundGeoLocation": {
+      "desiredAccuracy": 10,
+      "distanceFilter": 10,
+      "stopOnTerminate": false,
+      "startOnBoot": true
+    }
+  },
+
   "server": {
     "cleartext": true
   },

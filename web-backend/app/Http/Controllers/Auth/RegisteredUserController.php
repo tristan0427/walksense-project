@@ -81,7 +81,7 @@ class RegisteredUserController extends Controller
 
             $pwd = Pwd::create([
                 'user_id' => $pwduser->id,
-                'guardian_id' => $guardian->id,
+                'guardian_id' => $guardianUser->id,
                 'firstname' => $validated['pwd']['firstname'],
                 'lastname' => $validated['pwd']['lastname'],
                 'middle_initial' => $validated['pwd']['middle_initial'] ?? null,
