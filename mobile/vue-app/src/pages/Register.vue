@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import {computed, ref} from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
 
@@ -28,10 +28,39 @@ const showPassword = ref(false)
 const showConfirmPassword = ref(false)
 
 // Configure axios base URL
-axios.defaults.baseURL = 'http://172.23.172.98:8000'
-// axios.defaults.baseURL = 'http://192.168.254.125:8000'
+// axios.defaults.baseURL = 'http://172.23.172.98:8000'
+// axios.defaults.baseURL = 'http://192.168.1.7:8000'
+axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL
 axios.defaults.headers.common['Accept'] = 'application/json'
 axios.defaults.headers.common['Content-Type'] = 'application/json'
+
+
+const passwordChecks = computed(() => ({
+  minLength: guardianForm.value.password.length >= 8,
+  hasUppercase: /[A-Z]/.test(guardianForm.value.password),
+  hasLowercase: /[a-z]/.test(guardianForm.value.password),
+  hasNumber: /[0-9]/.test(guardianForm.value.password),
+  hasSpecial: /[!@#$%^&*(),.?":{}|<>]/.test(guardianForm.value.password),
+}))
+
+
+const isPasswordValid = computed(() => {
+  return Object.values(passwordChecks.value).every(check => check)
+})
+
+const passwordStrength = computed(() => {
+  const checks = Object.values(passwordChecks.value).filter(v => v).length
+  if (checks === 0) return { label: '', color: '' }
+  if (checks <= 2) return { label: 'Weak', color: 'text-red-600' }
+  if (checks <= 3) return { label: 'Fair', color: 'text-yellow-600' }
+  if (checks <= 4) return { label: 'Good', color: 'text-blue-600' }
+  return { label: 'Strong', color: 'text-green-600' }
+})
+
+const passwordsMatch = computed(() => {
+  if(!guardianForm.value.password_confirmation) return null
+  return guardianForm.value.password === guardianForm.value.password_confirmation
+})
 
 const goBack = () => {
   router.push('/')
@@ -45,15 +74,15 @@ const validateForm = () => {
     return false
   }
 
-  // Password match validation
-  if (guardianForm.value.password !== guardianForm.value.password_confirmation) {
-    errorMessage.value = 'Passwords do not match'
+  // Password requirements check
+  if (!isPasswordValid.value) {
+    errorMessage.value = 'Password must meet all security requirements'
     return false
   }
 
-  // Password strength validation
-  if (guardianForm.value.password.length < 8) {
-    errorMessage.value = 'Password must be at least 8 characters long'
+  // Password match validation
+  if (!passwordsMatch.value) {
+    errorMessage.value = 'Passwords do not match'
     return false
   }
 
@@ -234,6 +263,62 @@ const handleRegister = async () => {
             </button>
           </div>
 
+          <div v-if="guardianForm.password" class="mt-3 p-4 bg-gray-50 rounded-lg border-2 border-gray-200 space-y-2">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-semibold text-gray-700">Password Strength:</span>
+              <span :class="['text-xs font-bold', passwordStrength.color]">
+                {{ passwordStrength.label }}
+              </span>
+            </div>
+
+            <div class="space-y-1.5">
+              <div class="flex items-center gap-2">
+                <svg :class="['w-4 h-4 shrink-0', passwordChecks.minLength ? 'text-green-600' : 'text-gray-400']" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+                <span :class="['text-xs', passwordChecks.minLength ? 'text-green-600 font-medium' : 'text-gray-600']">
+                  At least 8 characters
+                </span>
+              </div>
+
+              <div class="flex items-center gap-2">
+                <svg :class="['w-4 h-4 shrink-0', passwordChecks.hasUppercase ? 'text-green-600' : 'text-gray-400']" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+                <span :class="['text-xs', passwordChecks.hasUppercase ? 'text-green-600 font-medium' : 'text-gray-600']">
+                  One uppercase letter (A-Z)
+                </span>
+              </div>
+
+              <div class="flex items-center gap-2">
+                <svg :class="['w-4 h-4 shrink-0', passwordChecks.hasLowercase ? 'text-green-600' : 'text-gray-400']" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+                <span :class="['text-xs', passwordChecks.hasLowercase ? 'text-green-600 font-medium' : 'text-gray-600']">
+                  One lowercase letter (a-z)
+                </span>
+              </div>
+
+              <div class="flex items-center gap-2">
+                <svg :class="['w-4 h-4 shrink-0', passwordChecks.hasNumber ? 'text-green-600' : 'text-gray-400']" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+                <span :class="['text-xs', passwordChecks.hasNumber ? 'text-green-600 font-medium' : 'text-gray-600']">
+                  One number (0-9)
+                </span>
+              </div>
+
+              <div class="flex items-center gap-2">
+                <svg :class="['w-4 h-4 shrink-0', passwordChecks.hasSpecial ? 'text-green-600' : 'text-gray-400']" fill="currentColor" viewBox="0 0 20 20">
+                  <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+                </svg>
+                <span :class="['text-xs', passwordChecks.hasSpecial ? 'text-green-600 font-medium' : 'text-gray-600']">
+                  One special character (!@#$%^&*)
+                </span>
+              </div>
+            </div>
+          </div>
+
           <div class="space-y-1 relative">
             <input
                 v-model="guardianForm.password_confirmation"
@@ -258,6 +343,21 @@ const handleRegister = async () => {
                       d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/>
               </svg>
             </button>
+          </div>
+
+          <div v-if="guardianForm.password_confirmation" class="mt-2">
+            <div v-if="passwordsMatch" class="flex items-center gap-2 text-green-600">
+              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
+              </svg>
+              <span class="text-sm font-medium">Passwords match ✓</span>
+            </div>
+            <div v-else class="flex items-center gap-2 text-red-600">
+              <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+              </svg>
+              <span class="text-sm font-medium">Passwords do not match</span>
+            </div>
           </div>
         </div>
 

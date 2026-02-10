@@ -14,8 +14,9 @@ const pwdLocations = ref([])
 const loading = ref(true)
 const error = ref('')
 const updateInterval = ref(null)
+const showLogoutConfirm = ref(false)
 
-axios.defaults.baseURL = 'http://172.23.172.98:8000'
+axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL
 const token = localStorage.getItem('token')
 if (token) {
   axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
@@ -185,15 +186,19 @@ const formatLastUpdated = (dateString) => {
   return date.toLocaleDateString()
 }
 
-
-
-
 const logout = () => {
-  localStorage.removeItem('token')
-  localStorage.removeItem('user')
-  router.push('/login?role=guardian')
+  showLogoutConfirm.value = true
+}
+const cancelLogout = () => {
+  showLogoutConfirm.value = false
 }
 
+const confirmLogout = () => {
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+  showLogoutConfirm.value = false
+  router.push('/')
+}
 const goAccount = () => {
   router.push('/account')
 }
@@ -207,8 +212,8 @@ const refreshLocations = () => {
 <template>
   <div class="min-h-screen bg-gray-100 flex flex-col">
 
-    <header class="bg-white shadow-md px-4 py-3 flex items-center justify-between">
-      <h1 class="text-lg font-bold text-gray-800">Guardian Dashboard</h1>
+    <header class="bg-[#f7d686] shadow-md px-4 py-3 flex items-center justify-between">
+      <h1 class="text-lg font-bold text-gray-800">WALKSENSE</h1>
 
       <div class="flex items-center gap-2">
         <!-- Refresh Button -->
@@ -251,6 +256,11 @@ const refreshLocations = () => {
     </div>
 
     <div class="flex-1 flex flex-col p-4 space-y-4">
+
+      <!-- Greeting Card -->
+      <div class="bg-yellow-100 rounded-2xl shadow p-4">
+        <h2 class="text-xl font-semibold text-gray-800">Hi Guardian!</h2>
+      </div>
 
       <!-- PWD Status Cards -->
       <div class="space-y-3">
@@ -351,9 +361,62 @@ const refreshLocations = () => {
         <h2 class="font-semibold text-gray-800 mb-2">Alerts</h2>
         <p class="text-sm text-gray-600">No alerts right now</p>
       </div>
-
     </div>
+    <div
+        v-if="showLogoutConfirm"
+        class="fixed inset-0 bg-black/40 backdrop-blur-sm z-[9998]"
+    ></div>
 
+
+    <div
+        v-if="showLogoutConfirm"
+        class="fixed inset-0 flex items-center justify-center z-[9999]"
+    >
+      <div class="bg-white rounded-2xl shadow-xl p-6 w-80 animate-fadeIn">
+        <h3 class="text-lg font-semibold text-gray-800 mb-3">
+          Confirm Logout
+        </h3>
+
+        <p class="text-sm text-gray-600 mb-6">
+          Are you sure you want to log out?
+        </p>
+
+        <div class="flex justify-end gap-3">
+          <button
+              @click="cancelLogout"
+              class="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700"
+          >
+            Cancel
+          </button>
+
+          <button
+              @click="confirmLogout"
+              class="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white"
+          >
+            Logout
+          </button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
+
+<style>
+@import 'leaflet/dist/leaflet.css';
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
+}
+</style>
 

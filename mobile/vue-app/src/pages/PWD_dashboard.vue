@@ -3,7 +3,6 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router'
 import LocationService from "../services/LocationService";
 
-
 const router = useRouter();
 const isTracking = ref(false);
 const currentLocation = ref(null);
@@ -11,17 +10,13 @@ const error = ref('');
 const user = ref(null);
 const menuOpen = ref(false)
 
-// ESP32-CAM IP address - replace with your actual IP
-const esp32CamUrl = ref('http://172.23.172.172:81/stream')
-
-
 onMounted(async () => {
   const userStr = localStorage.getItem('user');
   if (userStr) {
     user.value = JSON.parse(userStr);
   }
 
-
+  console.log('PWD Dashboard mounted - starting tracking automatically...');
   await startTracking();
 });
 
@@ -29,10 +24,10 @@ onUnmounted(async () => {
 
 })
 
-
 const startTracking = async () => {
-  try{
+  try {
     error.value = '';
+    console.log('Starting location tracking...');
 
     await LocationService.startTracking();
     isTracking.value = true;
@@ -41,25 +36,31 @@ const startTracking = async () => {
     currentLocation.value = position.coords;
 
     console.log('Tracking started successfully');
-  }catch (err){
-    error.value = err.message || 'Failed to  start tracking';
+    console.log('Current location:', currentLocation.value);
+  } catch (err) {
+    error.value = err.message || 'Failed to start tracking';
     console.error('Tracking error:', err);
+    isTracking.value = false;
+
+    // Log detailed error
+    console.error('Error details:', {
+      message: error.value,
+      error: err
+    });
   }
 };
 
-
 const stopTracking = async () => {
-  try{
+  try {
     await LocationService.stopTracking();
     isTracking.value = false;
-  }catch (err) {
+  } catch (err) {
     error.value = err.message || 'Failed to stop tracking'
     console.error('Tracking error:', err);
   }
 };
 
 const logout = async () => {
-
   await stopTracking();
 
   localStorage.removeItem('token');
@@ -73,10 +74,10 @@ const goAccount = () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-100">
+  <div class="min-h-screen bg-gray-100 flex flex-col">
 
     <!-- Header -->
-    <header class="bg-yellow-200 shadow-md px-4 py-3 flex items-center justify-between">
+    <header class="bg-[#f7d686] shadow-md px-4 py-3 flex items-center justify-between">
       <h1 class="text-lg font-bold text-gray-800">WALKSENSE</h1>
 
       <button @click="menuOpen = !menuOpen" class="text-gray-700 text-2xl">
@@ -105,11 +106,13 @@ const goAccount = () => {
       </div>
 
       <!-- Error Message -->
-      <div v-if="error" class="bg-red-100 border border-red-400 text-red-700 rounded-2xl p-4">
-        <p class="text-sm font-medium">⚠️ {{ error }}</p>
+      <div v-if="error" class="bg-red-100 border-4 border-red-500 text-red-700 rounded-2xl p-4 animate-pulse">
+        <p class="text-base font-bold">⚠️ TRACKING ERROR</p>
+        <p class="text-sm font-medium mt-2">{{ error }}</p>
+        <p class="text-xs text-red-600 mt-2">Please check your location permissions and GPS settings.</p>
       </div>
 
-      <!-- GPS Tracking Status Card (NEW) -->
+      <!-- GPS Tracking Status Card -->
       <div class="bg-yellow-100 rounded-2xl shadow p-4">
         <div class="flex items-center justify-between mb-3">
           <h2 class="font-semibold text-gray-800">GPS Tracking</h2>
@@ -168,7 +171,7 @@ const goAccount = () => {
           </div>
         </div>
 
-        <!-- Current Location Info (if available) -->
+        <!-- Current Location Info -->
         <div v-if="currentLocation" class="mt-3 pt-3 border-t border-yellow-200">
           <div class="grid grid-cols-2 gap-2 text-xs">
             <div>
@@ -197,15 +200,6 @@ const goAccount = () => {
             </div>
           </div>
         </div>
-
-        <!-- Restart Button (if tracking failed) -->
-        <button
-            v-if="!isTracking"
-            @click="startTracking"
-            class="w-full mt-3 py-2 bg-green-600 hover:bg-green-700 text-white font-medium rounded-xl transition"
-        >
-          Start Tracking
-        </button>
       </div>
 
       <!-- Online Status Card -->
@@ -220,22 +214,6 @@ const goAccount = () => {
         </div>
       </div>
 
-      <!-- ESP32-CAM Live Stream -->
-      <div class="bg-white rounded-2xl shadow p-4">
-        <h2 class="font-semibold text-gray-800 mb-3">Live Camera Feed</h2>
-        <div class="bg-gray-200 rounded-xl overflow-hidden">
-          <img
-              :src="esp32CamUrl"
-              alt="ESP32-CAM Live Stream"
-              class="w-full h-auto"
-              @error="handleStreamError"
-          />
-        </div>
-        <p class="text-xs text-gray-500 mt-2">
-          Stream URL: {{ esp32CamUrl }}
-        </p>
-      </div>
-
       <!-- Guardian Info -->
       <div class="bg-white rounded-2xl shadow p-4">
         <h2 class="font-semibold text-gray-800 mb-2">Guardian Information</h2>
@@ -244,14 +222,14 @@ const goAccount = () => {
         <p class="text-green-600 font-medium mt-1">● Connected</p>
       </div>
 
-      <!-- Safety Info Card (NEW) -->
+      <!-- Safety Info Card -->
       <div class="bg-blue-50 border border-blue-200 rounded-2xl p-4">
         <div class="flex items-start">
           <svg class="w-5 h-5 text-blue-600 mr-2 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
           <div class="text-sm text-blue-800">
-            <p class="font-semibold mb-1">Background Tracking</p>
+            <p class="font-semibold mb-1">Background Tracking Active</p>
             <p class="text-xs">Your location is tracked even when this app is closed or your phone is locked. This helps your guardian keep you safe.</p>
           </div>
         </div>
@@ -259,11 +237,42 @@ const goAccount = () => {
 
       <!-- Emergency Button -->
       <div class="bg-white rounded-2xl shadow p-4">
-        <button class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 px-6 rounded-xl transition">
+        <button class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 px-6 rounded-xl transition text-lg">
           🚨 Emergency Alert
         </button>
       </div>
 
+    </div>
+
+    <div
+        v-if="showLogoutConfirm"
+        class="fixed inset-0 flex items-center justify-center z-[9999]"
+    >
+      <div class="bg-white rounded-2xl shadow-xl p-6 w-80 animate-fadeIn">
+        <h3 class="text-lg font-semibold text-gray-800 mb-3">
+          Confirm Logout
+        </h3>
+
+        <p class="text-sm text-gray-600 mb-6">
+          Are you sure you want to log out?
+        </p>
+
+        <div class="flex justify-end gap-3">
+          <button
+              @click="cancelLogout"
+              class="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700"
+          >
+            Cancel
+          </button>
+
+          <button
+              @click="confirmLogout"
+              class="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white"
+          >
+            Logout
+          </button>
+        </div>
+      </div>
     </div>
 
   </div>

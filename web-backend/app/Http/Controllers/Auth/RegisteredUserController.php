@@ -10,12 +10,14 @@ use App\Models\Pwd;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Validation\Rules;
 use Illuminate\Validation\ValidationException;
 use Illuminate\View\View;
+use Random\RandomException;
 
 class RegisteredUserController extends Controller
 {
@@ -47,145 +49,227 @@ class RegisteredUserController extends Controller
             'pwd.middle_initial' => ['nullable', 'string', 'max:50'],
         ]);
 
-        try{
-            DB::beginTransaction();
-
-            $otp =str_pad(random_int(0,999999), 6, '0', STR_PAD_LEFT);
+        try {
+            // Generate OTP
+            $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
             $otpExpiresAt = now()->addMinutes(2);
 
-            $guardianUser = User::create([
-                'name' => $validated['guardian']['firstname'] . ' ' . $validated['guardian']['lastname'],
-                'email' => $validated['guardian']['email'],
-                'password' => Hash::make($validated['guardian']['password']),
-                'role' => 'guardian',
+            $cacheKey = 'registration_' . md5($validated['guardian']['email']);
+
+            // Store registration data in cache
+            Cache::put($cacheKey,[
+                'guardian' => $validated['guardian'],
+                'pwd' => $validated['pwd'],
                 'otp' => $otp,
-                'otp_expires_at' => $otpExpiresAt,
-                'is_verified' => false,
+                'otp_expires_at' => $otpExpiresAt->toDateTimeString(),
+                ],now()->addMinutes(10));
+
+            \Log::info('Registration data stored in cache', [
+                'cache_key' => $cacheKey,
+                'email' => $validated['guardian']['email'],
+                'otp' => $otp, // Remove this in production!
             ]);
 
-            $guardian = Guardian::create([
-                'user_id' => $guardianUser->id,
-                'firstname' => $validated['guardian']['firstname'],
-                'lastname' => $validated['guardian']['lastname'],
-                'middle_initial' => $validated['guardian']['middle_initial'] ?? null,
-                'address' => $validated['guardian']['address'],
-            ]);
-
-            $pwduser = User::create([
-                'name' => $validated['pwd']['firstname'] . ' ' . $validated['pwd']['lastname'],
-                'email' => 'pwd_'.$guardianUser->id . '_' . time() . '@walksense.local',
-                'password' => null,
-                'role' => 'pwd',
-                'is_verified' => true,
-            ]);
-
-            $pwd = Pwd::create([
-                'user_id' => $pwduser->id,
-                'guardian_id' => $guardianUser->id,
-                'firstname' => $validated['pwd']['firstname'],
-                'lastname' => $validated['pwd']['lastname'],
-                'middle_initial' => $validated['pwd']['middle_initial'] ?? null,
-            ]);
-
-            Mail::to($guardianUser->email)->send(new OtpMail($otp, $guardianUser->name));
-
-
-            DB::commit();
-            event(new Registered($guardianUser));
+            // Send OTP email
+            $guardianName = $validated['guardian']['firstname'] . ' ' . $validated['guardian']['lastname'];
+            Mail::to($validated['guardian']['email'])->send(new OtpMail($otp, $guardianName));
 
             return response()->json([
-                'message' => 'Registration successfully. Please check your email for a verification code.',
-                'email' => $guardianUser->email,
+                'message' => 'Registration initiated. Please check your email for a verification code.',
+                'email' => $validated['guardian']['email'],
                 'requires_verification' => true,
             ], 201);
-        }catch (\Exception $e){
-            DB::rollBack();
-            \Log::error('Registration failed: ' . $e->getMessage());
+
+        } catch (\Throwable $e) {
+            \Log::error('Registration initiation failed: ' . $e->getMessage());
 
             return response()->json([
                 'message' => 'Registration failed',
                 'error' => $e->getMessage(),
-            ],500);
+            ], 500);
         }
     }
 
     public function verifyOtp(Request $request): JsonResponse
     {
         $validated = $request->validate([
-            'email'=> ['required', 'email'],
+            'email' => ['required', 'email'],
             'otp' => ['required', 'string', 'size:6'],
         ]);
 
-        $user = User::where('email', $validated['email'])->first();
+        // Retrieve pending registration data from session
+        $cacheKey = 'registration_' . md5($validated['email']);
 
-        if(!$user){
-            return response()->json([
-               'message' => 'User not found.',
-            ],404);
-        }
-
-        if($user->is_verified){
-            return response()->json([
-                'message' => 'Account already verified.',
-            ],400);
-        }
-
-        if ($user->otp !== $validated['otp']) {
-            return response()->json([
-                'message' => 'Invalid verification code',
-            ], 400);
-        }
-
-        if (now()->gt($user->otp_expires_at)) {
-            return response()->json([
-                'message' => 'Verification code has expired',
-            ], 400);
-        }
-
-        $user->update([
-           'is_verified' => true,
-           'otp' => null,
-           'otp_expires_at' => null,
-           'email_verified_at' => now(),
+        \Log::info('Attempting OTP verification', [
+            'cache_key' => $cacheKey,
+            'email' => $validated['email'],
         ]);
 
-        return response()->json([
-            'message' => 'Account already successfully',
-            'user' => $user,
-        ],200);
+        $pendingData = Cache::get($cacheKey);
+
+        if (!$pendingData) {
+            return response()->json([
+                'message' => 'No pending registration found. Please register again.',
+            ], 400);
+        }
+
+        // Verify email matches
+        if ($pendingData['guardian']['email'] !== $validated['email']) {
+            return response()->json([
+                'message' => 'Email does not match pending registration.',
+            ], 400);
+        }
+
+        // Verify OTP
+        if ($pendingData['otp'] !== $validated['otp']) {
+            return response()->json([
+                'message' => 'Invalid verification code.',
+            ], 400);
+        }
+
+        // Check if OTP has expired
+        if (now()->gt($pendingData['otp_expires_at'])) {
+            return response()->json([
+                'message' => 'Verification code has expired. Please request a new one.',
+            ], 400);
+        }
+
+        // OTP is valid! Now create database records with proper error handling
+        try {
+            DB::beginTransaction();
+
+            // Create Guardian User
+            $guardianUser = User::create([
+                'name' => $pendingData['guardian']['firstname'] . ' ' . $pendingData['guardian']['lastname'],
+                'email' => $pendingData['guardian']['email'],
+                'password' => Hash::make($pendingData['guardian']['password']),
+                'role' => 'guardian',
+                'is_verified' => true,
+            ]);
+
+            // Set email_verified_at separately (if it's guarded)
+            $guardianUser->email_verified_at = now();
+            $guardianUser->save();
+
+            // Create Guardian record
+            $guardian = Guardian::create([
+                'user_id' => $guardianUser->id,
+                'firstname' => $pendingData['guardian']['firstname'],
+                'lastname' => $pendingData['guardian']['lastname'],
+                'middle_initial' => $pendingData['guardian']['middle_initial'] ?? null,
+                'address' => $pendingData['guardian']['address'],
+            ]);
+
+            // Create PWD User
+            $pwdUser = User::create([
+                'name' => $pendingData['pwd']['firstname'] . ' ' . $pendingData['pwd']['lastname'],
+                'email' => 'pwd_' . $guardianUser->id . '_' . time() . '@walksense.local',
+                'password' => null,
+                'role' => 'pwd',
+                'is_verified' => true,
+            ]);
+
+            // Set email_verified_at for PWD user
+            $pwdUser->email_verified_at = now();
+            $pwdUser->save();
+
+            // Create PWD record
+            $pwd = Pwd::create([
+                'user_id' => $pwdUser->id,
+                'guardian_id' => $guardianUser->id,
+                'firstname' => $pendingData['pwd']['firstname'],
+                'lastname' => $pendingData['pwd']['lastname'],
+                'middle_initial' => $pendingData['pwd']['middle_initial'] ?? null,
+            ]);
+
+            DB::commit();
+            Cache::forget($cacheKey);
+
+            // Fire registered event
+            event(new Registered($guardianUser));
+
+            return response()->json([
+                'message' => 'Account verified successfully! You can now login.',
+                'user' => $guardianUser,
+            ], 200);
+
+        } catch (\Throwable $e) {
+            DB::rollBack();
+
+            \Log::error('Account creation failed after OTP verification: ' . $e->getMessage());
+            \Log::error('Stack trace: ' . $e->getTraceAsString());
+
+            return response()->json([
+                'message' => 'Failed to create account. Please try again.',
+                'error' => config('app.debug') ? $e->getMessage() : 'An error occurred',
+            ], 500);
+        }
     }
 
-    public function resendOtp(Request $request): JsonResponse{
+    /**
+     * @throws RandomException
+     */
+    public function resendOtp(Request $request): JsonResponse
+    {
         $validated = $request->validate([
-            'email'=> ['required', 'email'],
+            'email' => ['required', 'email'],
         ]);
 
-        $user = User::where('email', $validated['email'])->first();
+        try {
 
-        if (!$user) {
+            $cacheKey = 'registration_' . md5($validated['email']);
+
+            \Log::info('Attempting to resend OTP', [
+                'cache_key' => $cacheKey,
+                'email' => $validated['email'],
+            ]);
+
+            $pendingData = Cache::get($cacheKey);
+
+            if (!$pendingData) {
+                \Log::warning('No pending registration found for OTP resend', [
+                    'cache_key' => $cacheKey,
+                    'email' => $validated['email'],
+                ]);
+
+                return response()->json([
+                    'message' => 'No pending registration found. Please register again.',
+                ], 404);
+            }
+
+            // Verify email matches
+            if ($pendingData['guardian']['email'] !== $validated['email']) {
+                return response()->json([
+                    'message' => 'Email does not match pending registration.',
+                ], 404);
+            }
+
+            // Generate new OTP
+            $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
+            $otpExpiresAt = now()->addMinutes(2);
+
+            // Update cache with new OTP
+            $pendingData['otp'] = $otp;
+            $pendingData['otp_expires_at'] = $otpExpiresAt->toDateTimeString();
+
+            Cache::put($cacheKey, $pendingData, now()->addMinutes(10));
+
+
+            // Send new OTP email
+            $guardianName = $pendingData['guardian']['firstname'] . ' ' . $pendingData['guardian']['lastname'];
+            Mail::to($validated['email'])->send(new OtpMail($otp, $guardianName));
+
             return response()->json([
-                'message' => 'User not found',
-            ], 404);
-        }
+                'message' => 'Verification code resent successfully.',
+            ], 200);
 
-        if ($user->is_verified) {
+        } catch (\Throwable $e) {
+            \Log::error('Resend OTP failed: ' . $e->getMessage());
+
             return response()->json([
-                'message' => 'Account already verified',
-            ], 400);
+                'message' => 'Failed to resend verification code.',
+                'error' => config('app.debug') ? $e->getMessage() : 'An error occurred',
+            ], 500);
         }
-
-        $otp = str_pad(random_int(0, 999999), 6, '0', STR_PAD_LEFT);
-        $otpExpiresAt = now()->addMinutes(2);
-
-        $user->update([
-            'otp' => $otp,
-            'otp_expires_at' => $otpExpiresAt,
-        ]);
-
-        Mail::to($user->email)->send(new OtpMail($otp, $user->email));
-
-        return response()->json([
-            'message' => 'Verification code resent successfully',
-        ],200);
     }
 }

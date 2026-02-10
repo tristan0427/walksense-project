@@ -1,7 +1,7 @@
 import {Capacitor} from '@capacitor/core';
 import {Geolocation} from '@capacitor/geolocation';
 import axios from 'axios';
-// import BackgroundGeolocation from "@capacitor-community/background-geolocation";
+import BackgroundGeolocation from "@/native/backgroundGeolocation.ts";
 import type { Position } from '@capacitor/geolocation';
 
 // Configure axios with proper base URL
@@ -45,6 +45,16 @@ class LocationService {
                 await this.stopTracking();
             }
 
+            const initialLocation = await this.getCurrentLocation();
+            await this.sendLocationUpdate({
+                latitude: initialLocation.coords.latitude,
+                longitude: initialLocation.coords.longitude,
+                accuracy: initialLocation.coords.accuracy,
+                altitude: initialLocation.coords.altitude || undefined,
+                speed: initialLocation.coords.speed || undefined,
+                bearing: initialLocation.coords.heading || undefined,
+            });
+
             this.isTracking = true;
 
             console.log('Requesting background location permissions...');
@@ -59,8 +69,11 @@ class LocationService {
                     requestPermissions: true,
                     stale: false,
                     distanceFilter: 20,
+                    timeout: 30000,
+                    maximumAge: 5000,
+                    enableHighAccuracy: true,
                 },
-                async (location, error) => {
+                async (location:any, error:any) => {
                     if (error) {
                         console.error('Location error:', error);
 

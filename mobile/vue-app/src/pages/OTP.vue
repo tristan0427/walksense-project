@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import {ref, onMounted, computed} from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import axios from 'axios'
 
@@ -13,15 +13,49 @@ const loading = ref(false)
 const errorMessage = ref('')
 const successMessage = ref('')
 const resending = ref(false)
+const inputRefs = ref<HTMLInputElement[]>([])
+
+const timeRemaining = ref(120)
+const timerInterval = ref<number | null>(null)
 
 // Configure axios
-axios.defaults.baseURL = 'http://172.23.172.98:8000'
-// axios.defaults.baseURL = 'http://192.168.254.125:8000'
+axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL
 axios.defaults.headers.common['Accept'] = 'application/json'
 axios.defaults.headers.common['Content-Type'] = 'application/json'
 
-// Auto-focus first input
-const inputRefs = ref<HTMLInputElement[]>([])
+const formattedTime = computed(() => {
+  const minutes = Math.floor(timeRemaining.value /60)
+  const seconds = timeRemaining.value %60
+
+  return `${minutes}: ${seconds.toString().padStart(2, '0')}`
+})
+
+const timeColor = computed(()=>{
+  if (timeRemaining.value > 60) return 'text-green-600'
+  if (timeRemaining.value > 30) return 'text-yellow-600'
+  return 'text-red-600'
+})
+
+const isExpired = computed(() => timeRemaining.value <=0)
+
+const startTimer = () => {
+  if(timerInterval.value){
+    clearInterval(timerInterval.value)
+  }
+
+  timeRemaining.value = 120
+
+  timerInterval.value = window.setInterval(()=>{
+    if(timeRemaining.value > 0){
+      timeRemaining.value--
+    }else {
+      if(timerInterval.value){
+        clearInterval(timerInterval.value)
+      }
+    }
+  },1000)
+}
+
 
 onMounted(() => {
   if (!email.value) {
@@ -34,6 +68,8 @@ onMounted(() => {
   if (inputRefs.value[0]) {
     inputRefs.value[0].focus()
   }
+
+  startTimer()
 })
 
 const handleInput = (index: number, event: Event) => {
@@ -88,6 +124,10 @@ const handleVerify = async () => {
     return
   }
 
+  if(isExpired.value){
+    errorMessage.value = 'Code has expired. Please request a new one.'
+  }
+
   loading.value = true
 
   try {
@@ -98,9 +138,9 @@ const handleVerify = async () => {
 
     successMessage.value = response.data.message
 
-    // Redirect to login after 2 seconds
+
     setTimeout(() => {
-      router.push('/login/guardian')
+      router.push('/')
     }, 2000)
 
   } catch (error: any) {
@@ -134,6 +174,8 @@ const handleResend = async () => {
     otp.value = ['', '', '', '', '', '']
     inputRefs.value[0]?.focus()
 
+    startTimer()
+
   } catch (error: any) {
     console.error('Resend error:', error)
 
@@ -153,29 +195,31 @@ const goBack = () => {
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col bg-[#f7d686] px-6 py-6">
+  <div class="min-h-screen flex flex-col bg-[#f7d686]">
     <!-- Back Button -->
-    <button
-        @click="goBack"
-        class="self-start mb-6 flex items-center gap-2 text-gray-700 hover:text-black transition-colors group"
-    >
-      <svg
-          class="w-6 h-6 transform group-hover:-translate-x-1 transition-transform"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
+    <div class="px-4 pt-4 pb-2">
+      <button
+          @click="goBack"
+          class="flex items-center gap-2 text-gray-700 hover:text-black transition-colors group"
       >
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-      </svg>
-      <span class="font-medium">Back</span>
-    </button>
+        <svg
+            class="w-6 h-6 transform group-hover:-translate-x-1 transition-transform"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+        >
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+        </svg>
+        <span class="font-medium">Back</span>
+      </button>
+    </div>
 
     <!-- Main Content -->
-    <div class="flex-1 flex flex-col items-center justify-center">
+    <div class="flex-1 flex flex-col justify-center px-6 pb-8">
       <!-- Header -->
-      <div class="w-full max-w-md text-center mb-8">
+      <div class="w-full text-center mb-8">
         <div class="mb-6">
-          <div class="w-20 h-20 bg-black rounded-full flex items-center justify-center mx-auto mb-4">
+          <div class="w-20 h-20 bg-black rounded-full flex items-center justify-center mx-auto">
             <svg class="w-10 h-10 text-[#f7d686]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                     d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
@@ -183,32 +227,53 @@ const goBack = () => {
           </div>
         </div>
 
-        <h1 class="text-3xl font-bold mb-2">
+        <h1 class="text-2xl sm:text-3xl font-bold text-black mb-3">
           Verify Your Email
         </h1>
-        <p class="text-sm text-gray-700 mb-2">
+        <p class="text-sm text-gray-700 mb-1">
           We've sent a verification code to
         </p>
-        <p class="text-sm font-semibold text-black">
+        <p class="text-sm font-semibold text-black break-all">
           {{ email }}
         </p>
       </div>
 
+      <div class="w-full mb-6">
+        <div class="bg-white rounded-xl p-4 shadow-md border-2 border-gray-200">
+          <div class="flex items-center justify-center gap-2">
+            <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <span class="text-sm text-gray-600">Code expires in:</span>
+            <span :class="['text-xl font-bold font-mono', timeColor]">
+              {{ formattedTime }}
+            </span>
+          </div>
+
+          <!-- Expired warning -->
+          <div v-if="isExpired" class="mt-2 text-center">
+            <p class="text-xs text-red-600 font-semibold">
+              Code has expired! Please request a new one.
+            </p>
+          </div>
+        </div>
+      </div>
+
       <!-- Success Message -->
-      <div v-if="successMessage" class="w-full max-w-md mb-4 p-3 bg-green-100 border border-green-400 text-green-700 rounded-lg text-sm text-center">
+      <div v-if="successMessage" class="w-full mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded-lg text-sm text-center font-medium">
         {{ successMessage }}
       </div>
 
       <!-- Error Message -->
-      <div v-if="errorMessage" class="w-full max-w-md mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm text-center">
+      <div v-if="errorMessage" class="w-full mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm text-center font-medium">
         {{ errorMessage }}
       </div>
 
       <!-- OTP Input -->
-      <div class="w-full max-w-md mb-8">
-        <div class="flex justify-center gap-3">
+      <div class="w-full mb-8">
+        <div class="flex justify-center gap-2 sm:gap-3">
           <input
-              v-for="(digit, index) in otp"
+              v-for="(_, index) in otp"
               :key="index"
               :ref="el => { if (el) inputRefs[index] = el as HTMLInputElement }"
               v-model="otp[index]"
@@ -217,29 +282,29 @@ const goBack = () => {
               type="text"
               inputmode="numeric"
               maxlength="1"
-              class="w-14 h-14 text-center text-2xl font-bold bg-white border-2 border-gray-300 rounded-lg focus:border-black focus:outline-none transition-colors"
+              class="w-12 h-12 sm:w-14 sm:h-14 text-center text-2xl font-bold bg-white border-2 border-gray-300 rounded-lg focus:border-black focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-1 transition-colors"
           />
         </div>
       </div>
 
-
+      <!-- Verify Button -->
       <button
           @click="handleVerify"
           :disabled="loading || otp.join('').length !== 6"
-          class="w-full max-w-md py-4 rounded-full bg-black text-white text-lg font-semibold hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all mb-6"
+          class="w-full py-4 rounded-full bg-black text-white text-base sm:text-lg font-semibold hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all mb-8"
       >
         {{ loading ? 'Verifying...' : 'Verify Code' }}
       </button>
 
-
-      <div class="text-center">
-        <p class="text-sm text-gray-700 mb-2">
+      <!-- Resend Section -->
+      <div class="w-full text-center">
+        <p class="text-sm text-gray-700 mb-3">
           Didn't receive the code?
         </p>
         <button
             @click="handleResend"
             :disabled="resending"
-            class="text-sm font-semibold text-black underline hover:no-underline disabled:opacity-50"
+            class="text-sm sm:text-base font-semibold text-black underline hover:no-underline disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
         >
           {{ resending ? 'Sending...' : 'Resend Code' }}
         </button>

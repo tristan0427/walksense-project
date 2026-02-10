@@ -282,6 +282,8 @@
       <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/webmozart/assert" />
       <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/laravel/breeze" />
       <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/laravel/sanctum" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/storage/app" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/storage/framework" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />
