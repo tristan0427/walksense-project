@@ -22,6 +22,10 @@ android {
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
+
+    aaptOptions {
+        noCompress "tflite"  // Important: Don't compress model
+    }
 }
 
 repositories {
@@ -40,6 +44,10 @@ dependencies {
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')
+
+    implementation 'org.tensorflow:tensorflow-lite:2.17.0'
+    implementation 'org.tensorflow:tensorflow-lite-support:0.5.0'
+    implementation 'org.tensorflow:tensorflow-lite-gpu:2.17.0'
 }
 
 apply from: 'capacitor.build.gradle'

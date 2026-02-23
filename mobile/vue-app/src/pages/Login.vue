@@ -52,6 +52,10 @@ const handleLogin = async () => {
     localStorage.setItem('token', token)
     localStorage.setItem('user', JSON.stringify(user))
 
+    if (response.data.guardian) {
+      localStorage.setItem('guardian', JSON.stringify(response.data.guardian))
+    }
+
 
     axios.defaults.headers.common['Authorization'] = `Bearer ${token}`
 

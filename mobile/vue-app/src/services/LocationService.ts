@@ -5,7 +5,7 @@ import BackgroundGeolocation from "@/native/backgroundGeolocation.ts";
 import type { Position } from '@capacitor/geolocation';
 
 // Configure axios with proper base URL
-axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL || 'http://172.23.172.98:8000';
+axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL;
 
 // Set auth token
 const token = localStorage.getItem('token');
