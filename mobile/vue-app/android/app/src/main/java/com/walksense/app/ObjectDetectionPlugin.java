@@ -145,7 +145,7 @@ public class ObjectDetectionPlugin extends Plugin {
     // ===== Detection =====
 
     @PluginMethod
-    public void detectFromStream(PluginCall call) {
+       public void detectFromStream(PluginCall call) {
         if (!isModelLoaded) {
             call.reject("Model not loaded");
             return;
@@ -160,24 +160,30 @@ public class ObjectDetectionPlugin extends Plugin {
                 return;
             }
             // Create a mutable copy for processing
-            frameToProcess = Bitmap.createBitmap(latestFrame);
+            frameToProcess = latestFrame.copy(latestFrame.getConfig(), false);
         }
 
+        Bitmap resized = null;
         try {
-            // Resize frame
-            Bitmap resized = Bitmap.createScaledBitmap(
-                    frameToProcess, INPUT_SIZE, INPUT_SIZE, true
-            );
+            resized = Bitmap.createScaledBitmap(frameToProcess, INPUT_SIZE, INPUT_SIZE, true);
 
-            // Convert to ByteBuffer
             ByteBuffer inputBuffer = convertBitmapToByteBuffer(resized);
 
-            // Run inference — output shape: [1][8400][22] for 18 classes (0-17)
-            float[][][] output = new float[1][22][8400];
-            tflite.run(inputBuffer, output);
+            // Log input buffer info
+            Log.d(TAG, "Input buffer size: " + inputBuffer.capacity());
+
+            // Model outputs [1][22][8400] — confirmed from logcat
+            float[][][] outputTransposed = new float[1][22][8400];
+            tflite.run(inputBuffer, outputTransposed);
+            Log.d(TAG, "Ran inference with shape [1][22][8400]");
+
 
             // Post-process
-            List<Detection> detections = postProcessTransposed(output[0], 0.6f);
+            Double confidenceParam = call.getDouble("confidence", 0.3);
+            float confidenceThreshold = confidenceParam != null ? confidenceParam.floatValue() : 0.3f;
+
+            List<Detection> detections = postProcessTransposed(outputTransposed[0], confidenceThreshold);
+            Log.d(TAG, "Number of detections: " + detections.size());
 
             // Find nearest
             Detection nearest = findNearestObject(detections);
@@ -203,16 +209,17 @@ public class ObjectDetectionPlugin extends Plugin {
             ret.put("success", true);
             call.resolve(ret);
 
-            // Clean up bitmaps
-            frameToProcess.recycle();
-            resized.recycle();
-
         } catch (Exception e) {
             Log.e(TAG, "Detection failed", e);
+            call.reject("Detection error: " + e.getMessage());
+        } finally {
+
+            if (resized != null && !resized.isRecycled()) {
+                resized.recycle();
+            }
             if (frameToProcess != null && !frameToProcess.isRecycled()) {
                 frameToProcess.recycle();
             }
-            call.reject("Detection error: " + e.getMessage());
         }
     }
 
@@ -241,39 +248,31 @@ public class ObjectDetectionPlugin extends Plugin {
     private List<Detection> postProcessTransposed(float[][] output, float threshold) {
         List<Detection> detections = new ArrayList<>();
 
-        int numDetections = output[0].length; // 8400
+        int numDetections = output[0].length; // 8400 anchors
 
         for (int i = 0; i < numDetections; i++) {
-            // Extract bbox (first 4 rows)
             float cx = output[0][i];
             float cy = output[1][i];
-            float w = output[2][i];
-            float h = output[3][i];
+            float w  = output[2][i];
+            float h  = output[3][i];
 
-
-            float objectConfidence = output[4][i];
-
-            if (objectConfidence < threshold) continue;
-
-
+            // YOLOv8 has NO objectness score — class scores start at row 4
             int classId = 0;
-            float maxClassScore = output[5][i];
-            for (int j = 6; j < 22; j++) {
+            float maxClassScore = output[4][i];
+            for (int j = 5; j < 22; j++) {
                 if (output[j][i] > maxClassScore) {
                     maxClassScore = output[j][i];
-                    classId = j - 5;
+                    classId = j - 4;
                 }
             }
 
-            float confidence = objectConfidence * maxClassScore;
-            if (confidence < threshold) continue;
+            if (maxClassScore < threshold) continue;
 
-
+            // Convert from normalized coords to pixel coords
             float x1 = (cx - w / 2) * INPUT_SIZE;
             float y1 = (cy - h / 2) * INPUT_SIZE;
             float x2 = (cx + w / 2) * INPUT_SIZE;
             float y2 = (cy + h / 2) * INPUT_SIZE;
-
 
             x1 = Math.max(0, Math.min(INPUT_SIZE - 1, x1));
             y1 = Math.max(0, Math.min(INPUT_SIZE - 1, y1));
@@ -282,7 +281,7 @@ public class ObjectDetectionPlugin extends Plugin {
 
             Detection det = new Detection();
             det.className = getClassName(classId);
-            det.confidence = confidence;
+            det.confidence = maxClassScore;
             det.x1 = x1;
             det.y1 = y1;
             det.x2 = x2;

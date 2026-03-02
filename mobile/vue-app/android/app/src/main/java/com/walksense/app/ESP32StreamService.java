@@ -118,10 +118,6 @@ public class ESP32StreamService {
                                         callback.onFrameReceived(bitmap);
                                     }
 
-                                    if (frameCount > 1) {
-                                        bitmap.recycle(); // Free memory
-                                    }
-
                                     if (frameCount % 30 == 0) {
                                         Log.d(TAG, "✓ " + frameCount + " frames received");
                                     }

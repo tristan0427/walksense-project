@@ -19,7 +19,8 @@ const esp32Status = ref('Not Connected');
 const nearestObject = ref(null);
 const detectionInterval = ref(null);
 const lastSpokenTime = ref(0);
-const SPEAK_DELAY = 4000;
+const isSpeaking = ref(false);
+const SPEAK_DELAY = 3000;
 
 onMounted(async () => {
   console.log('PWD Dashboard mounted');
@@ -28,6 +29,7 @@ onMounted(async () => {
     console.log('Stream connected event:', data);
     esp32Connected.value = true;
     esp32Status.value = 'Connected';
+    startDetection();
   });
 
   ObjectDetection.addListener('streamError', (data) => {
@@ -44,9 +46,11 @@ onMounted(async () => {
     console.error('Model load failed:', err);
   }
 
+  // Check plugin methods
+  console.log('ObjectDetection plugin methods:', ObjectDetection);
+
   await connectToESP32();
 
-  startDetection();
 
 
   const userStr = localStorage.getItem('user');
@@ -70,63 +74,65 @@ onMounted(async () => {
 onUnmounted(async () => {
   stopDetection();
   await ObjectDetection.stopESP32Stream();
-  ObjectDetection.removeAllListeners();
+  await ObjectDetection.removeAllListeners();
 })
 
 //YOLO Model
 
 const connectToESP32 = async () => {
-  try{
-    const result = await ObjectDetection.startESP32Stream();
-    if(result.success){
-      esp32Connected.value = true;
-      console.log('ESP32 connected');
-    }
-  }catch (err){
+  try {
+    await ObjectDetection.startESP32Stream();
+    console.log('ESP32 stream thread started, waiting for first frame...');
+  } catch (err) {
     console.error('ESP32 Connection failed:', err);
   }
 };
 
 const startDetection = () => {
   detectionInterval.value = setInterval(async () => {
-    try{
+    try {
       const result = await ObjectDetection.detectFromStream({
-        confidence: 0.6
+        confidence: 0.3
       });
 
       console.log('Detection result:', result);
 
-      if (result.nearest){
+      // ← Move these two lines UP here, outside the if/else
+      const now = Date.now();
+      const canSpeak = !isSpeaking.value && (now - lastSpokenTime.value >= SPEAK_DELAY);
+
+      if (result.nearest) {
         nearestObject.value = result.nearest;
         console.log('Nearest object found:', result.nearest);
 
-        //TTS
-        const now = Date.now();
-        if(now - lastSpokenTime.value >= SPEAK_DELAY){
+        if (canSpeak) {
           const msg = `${result.nearest.class} ${result.nearest.distance} on the ${result.nearest.direction}`;
-          console.log('Attempting to speak:', msg); // ADD THIS
-
+          isSpeaking.value = true;
           try {
             await TextToSpeech.speak({
               text: msg,
               lang: 'en-US',
-              rate: 1.0,
+              rate: 0.9,
               pitch: 1.0,
               volume: 1.0
             });
-            console.log('Speech completed'); // ADD THIS
-            lastSpokenTime.value = now;
+            lastSpokenTime.value = Date.now();
           } catch (ttsError) {
-            console.error('TTS error:', ttsError); // ADD THIS
+            console.error('TTS error:', ttsError);
+          } finally {
+            isSpeaking.value = false;
           }
         }
+
       } else {
-        console.log('No objects detected in this frame'); // ADD THIS
+        nearestObject.value = null;
       }
-    }catch (err) {
+
+    } catch (err) {
       console.error('Detection error:', err);
+      isSpeaking.value = false;
     }
-  }, 500);
+  }, 1000);
 };
 
 const stopDetection = () => {
