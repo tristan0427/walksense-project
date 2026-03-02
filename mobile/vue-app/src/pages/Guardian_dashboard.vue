@@ -47,7 +47,7 @@ const initializeMap = async () => {
 
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
       attribution: '© OpenStreetMap',
-      maxZoom: 19,
+      maxZoom: 23,
     }).addTo(map.value)
 
     console.log('Map initialized')
@@ -137,17 +137,17 @@ const updateMapMarkers = () => {
 
           <div style="font-size: 12px; color: #374151;">
             <p style="margin: 4px 0;">
-              📍 ${parseFloat(pwd.location.latitude).toFixed(6)}, ${parseFloat(pwd.location.longitude).toFixed(6)}
+               ${parseFloat(pwd.location.latitude).toFixed(6)}, ${parseFloat(pwd.location.longitude).toFixed(6)}
             </p>
             ${pwd.location.accuracy
           ? `<p style="margin: 4px 0;">
-      🎯 ±${Number(pwd.location.accuracy).toFixed(0)}m
+       ±${Number(pwd.location.accuracy).toFixed(0)}m
     </p>`
           : ''
       }
             ${pwd.location.battery_level ? `<p style="margin: 4px 0;">🔋 ${pwd.location.battery_level}%</p>` : ''}
             <p style="margin: 4px 0; font-size: 11px; color: #6b7280;">
-              🕒 ${formatLastUpdated(pwd.location.last_updated)}
+               ${formatLastUpdated(pwd.location.last_updated)}
             </p>
           </div>
         </div>
@@ -325,7 +325,7 @@ const refreshLocations = () => {
                 v-if="!isPwdOnline(pwd.location.last_updated)"
                 class="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800"
             >
-              ⚠️ Device appears offline. Last location from {{ formatLastUpdated(pwd.location.last_updated) }}.
+              Device appears offline. Last location from {{ formatLastUpdated(pwd.location.last_updated) }}.
             </div>
           </div>
           <div v-else>
@@ -352,7 +352,7 @@ const refreshLocations = () => {
           <!-- Leaflet map will render here -->
         </div>
         <p class="text-xs text-gray-500 mt-2">
-          📍 Map updates every 10 seconds • Click markers for details
+           Map updates every 10 seconds • Click markers for details
         </p>
       </div>
 
@@ -364,13 +364,13 @@ const refreshLocations = () => {
     </div>
     <div
         v-if="showLogoutConfirm"
-        class="fixed inset-0 bg-black/40 backdrop-blur-sm z-[9998]"
+        class="fixed inset-0 bg-black/40 backdrop-blur-sm z-9998"
     ></div>
 
 
     <div
         v-if="showLogoutConfirm"
-        class="fixed inset-0 flex items-center justify-center z-[9999]"
+        class="fixed inset-0 flex items-center justify-center z-9999"
     >
       <div class="bg-white rounded-2xl shadow-xl p-6 w-80 animate-fadeIn">
         <h3 class="text-lg font-semibold text-gray-800 mb-3">

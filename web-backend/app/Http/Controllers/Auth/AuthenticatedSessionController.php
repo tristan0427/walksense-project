@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
-use App\Http\Requests\Auth\LoginRequest;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -25,9 +24,8 @@ class AuthenticatedSessionController extends Controller
     /**
      * Handle an incoming authentication request.
      */
-    public function store(LoginRequest $request): JsonResponse
+    public function store(Request $request): JsonResponse
     {
-        $request->authenticate();
 
         $validator = Validator::make($request->all(), [
             'email' => 'required|email',
@@ -45,25 +43,26 @@ class AuthenticatedSessionController extends Controller
 
         $user = User::where('email', $request->email)->first();
 
-        if(!$user){
+        if (!$user || !\Hash::check($request->password, $user->password)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Invalid credentials',
             ], 401);
         }
 
-        if ($request->login_as === 'pwd' && $user->role === 'guardian'){
+        if ($request->login_as === 'pwd' && $user->role === 'guardian') {
             $pwd = Pwd::where('guardian_id', $user->id)->first();
 
-            if (!$pwd){
+            if (!$pwd) {
                 return response()->json([
                     'success' => false,
                     'message' => 'No PWD account found for this guardian',
-                ],404);
+                ], 404);
             }
+
             $pwdUser = User::find($pwd->user_id);
 
-            if(!$pwdUser){
+            if (!$pwdUser) {
                 return response()->json([
                     'success' => false,
                     'message' => 'PWD user not found',
@@ -73,18 +72,18 @@ class AuthenticatedSessionController extends Controller
             $token = $pwdUser->createToken('mobile-token')->plainTextToken;
 
             return response()->json([
-                'success' => true,
-                'message' => 'Login successful as PWD',
-                'token' => $token,
-                'user' => [
-                    'id' => $pwdUser->id,
-                    'name' => $pwdUser->name,
+                'success'  => true,
+                'message'  => 'Login successful as PWD',
+                'token'    => $token,
+                'user'     => [
+                    'id'    => $pwdUser->id,
+                    'name'  => $pwdUser->name,
                     'email' => $pwdUser->email,
-                    'role' => $pwdUser->role,
+                    'role'  => $pwdUser->role,
                 ],
                 'guardian' => [
-                    'id' => $user->id,
-                    'name' => $user->name,
+                    'id'    => $user->id,
+                    'name'  => $user->name,
                     'email' => $user->email,
                 ]
             ]);

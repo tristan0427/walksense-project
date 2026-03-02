@@ -54,15 +54,24 @@ const router = createRouter({
 
 router.beforeEach((to, from, next) => {
     const token = localStorage.getItem('token')
-    const user = JSON.parse(localStorage.getItem('user') || '{}')
+    const userStr = localStorage.getItem('user')
+    const user = userStr ? JSON.parse(userStr) : null
+
+
+    if (token && user && (to.path === '/' || to.name === 'Login')) {
+        if (user.role === 'pwd') return next('/pwd-dashboard')
+        if (user.role === 'guardian') return next('/guardian')
+    }
 
     if (to.meta.requiresAuth && !token) {
-        next('/login')
-    } else if (to.meta.role && user.role !== to.meta.role) {
-        next('/')
-    } else {
-        next()
+        return next('/')
     }
+
+    if (to.meta.role && user?.role !== to.meta.role) {
+        return next('/')
+    }
+
+    next()
 })
 
 export default router
