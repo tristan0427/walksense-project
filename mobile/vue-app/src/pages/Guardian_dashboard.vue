@@ -4,9 +4,11 @@ import { useRouter } from 'vue-router'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import axios from "axios";
+import markerPinUrl from '/gps-mark-pin.png'
 
 const router = useRouter()
 const menuOpen = ref(false)
+const initialViewSet = ref(false)
 const mapContainer = ref(null)
 const map = ref(null)
 const markers = ref(new Map())
@@ -37,18 +39,43 @@ onUnmounted(() => {
   }
 })
 
+const navigateToPwd = (lat, lng) => {
+  navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const origin = `${position.coords.latitude},${position.coords.longitude}`
+        const destination = `${lat},${lng}`
+        window.open(
+            `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`,
+            '_blank'
+        )
+      },
+      () => {
+        window.open(
+            `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`,
+            '_blank'
+        )
+      }
+  )
+}
+
+window._navigateToPwd = navigateToPwd
+
 const initializeMap = async () => {
   try {
     if (!mapContainer.value) return
 
 
-    map.value = L.map(mapContainer.value).setView([7.4474, 125.8078], 13)
+    map.value = L.map(mapContainer.value, {
+      attributionControl: false,
+    }).setView([7.4474, 125.8078], 15)
 
-
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap',
-      maxZoom: 23,
+    L.tileLayer('https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}{r}.png?api_key=' + import.meta.env.VITE_STADIA_API_KEY, {
+      attribution: '&copy; <a href="https://stadiamaps.com/">Stadia Maps</a>' +
+          ' &copy; <a href="https://openmaptiles.org/">OpenMapTiles</a>' +
+          ' &copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 20,
     }).addTo(map.value)
+
 
     console.log('Map initialized')
   } catch (err) {
@@ -90,77 +117,78 @@ const updateMapMarkers = () => {
       marker?.setLatLng(position)
     } else {
       // Create custom marker
-      const customIcon = L.divIcon({
-        className: 'custom-marker',
-        html: `
-          <div style="
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            width: 32px;
-            height: 32px;
-            border-radius: 50% 50% 50% 0;
-            transform: rotate(-45deg);
-            border: 3px solid white;
-            box-shadow: 0 3px 8px rgba(0,0,0,0.3);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-          ">
-            <div style="transform: rotate(45deg); font-size: 16px;">📍</div>
-          </div>
-        `,
-        iconSize: [32, 32],
-        iconAnchor: [16, 32],
-        popupAnchor: [0, -32],
+      const customIcon = L.icon({
+        iconUrl: markerPinUrl,
+        iconSize: [40, 40],
+        iconAnchor: [20, 40],
+        popupAnchor: [0, -40],
       })
 
-      // Create marker
       const marker = L.marker(position, { icon: customIcon }).addTo(map.value)
 
-      // Add popup
+
       const isOnline = isPwdOnline(pwd.location.last_updated)
 
       marker.bindPopup(`
-        <div style="min-width: 200px; font-family: sans-serif;">
-          <h3 style="margin: 0 0 8px 0; font-weight: bold;">${pwd.pwd_name}</h3>
+  <div style="min-width: 200px; font-family: sans-serif;">
+    <h3 style="margin: 0 0 8px 0; font-weight: bold;">${pwd.pwd_name}</h3>
 
-          <span style="
-            display: inline-block;
-            padding: 3px 8px;
-            border-radius: 10px;
-            font-size: 11px;
-            font-weight: bold;
-            margin-bottom: 8px;
-            ${isOnline ? 'background: #10b981; color: white;' : 'background: #6b7280; color: white;'}
-          ">
-            ${isOnline ? '🟢 Online' : '⚪ Offline'}
-          </span>
+    <span style="
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: bold;
+      margin-bottom: 8px;
+      ${isOnline ? 'background: #10b981; color: white;' : 'background: #6b7280; color: white;'}
+    ">
+      ${isOnline ? '🟢 Online' : '⚪ Offline'}
+    </span>
 
-          <div style="font-size: 12px; color: #374151;">
-            <p style="margin: 4px 0;">
-               ${parseFloat(pwd.location.latitude).toFixed(6)}, ${parseFloat(pwd.location.longitude).toFixed(6)}
-            </p>
-            ${pwd.location.accuracy
-          ? `<p style="margin: 4px 0;">
-       ±${Number(pwd.location.accuracy).toFixed(0)}m
-    </p>`
+    <div style="font-size: 12px; color: #374151;">
+      <p style="margin: 4px 0;">
+        ${parseFloat(pwd.location.latitude).toFixed(6)}, ${parseFloat(pwd.location.longitude).toFixed(6)}
+      </p>
+      ${pwd.location.accuracy
+          ? `<p style="margin: 4px 0;">±${Number(pwd.location.accuracy).toFixed(0)}m</p>`
           : ''
       }
-            ${pwd.location.battery_level ? `<p style="margin: 4px 0;">🔋 ${pwd.location.battery_level}%</p>` : ''}
-            <p style="margin: 4px 0; font-size: 11px; color: #6b7280;">
-               ${formatLastUpdated(pwd.location.last_updated)}
-            </p>
-          </div>
-        </div>
-      `)
+      ${pwd.location.battery_level ? `<p style="margin: 4px 0;">🔋 ${pwd.location.battery_level}%</p>` : ''}
+      <p style="margin: 4px 0; font-size: 11px; color: #6b7280;">
+        ${formatLastUpdated(pwd.location.last_updated)}
+      </p>
+    </div>
+
+        <button onclick="window._navigateToPwd(${pwd.location.latitude}, ${pwd.location.longitude})"
+       style="
+         display: block;
+         width: 100%;
+         margin-top: 10px;
+         padding: 8px 12px;
+         background: #f7d686;
+         color: #5a3e00;
+         text-align: center;
+         text-decoration: none;
+         border-radius: 8px;
+         font-weight: bold;
+         font-size: 13px;
+         border: none;
+         cursor: pointer;
+       ">
+        Navigate to PWD
+    </button>
+  </div>
+`)
 
       markers.value.set(pwd.pwd_id, marker)
     }
   })
 
 
-  if (pwdLocations.value.length > 0 && pwdLocations.value[0].location) {
+  if (!initialViewSet.value && pwdLocations.value.length > 0 && pwdLocations.value[0].location) {
     const loc = pwdLocations.value[0].location
-    map.value?.setView([parseFloat(loc.latitude), parseFloat(loc.longitude)], 15)
+    map.value?.setView([parseFloat(loc.latitude), parseFloat(loc.longitude)], 17)
+    initialViewSet.value = true
   }
 }
 
@@ -403,6 +431,10 @@ const refreshLocations = () => {
 
 <style>
 @import 'leaflet/dist/leaflet.css';
+
+.leaflet-control-attribution {
+  display: none !important;
+}
 
 @keyframes fadeIn {
   from {

@@ -156,17 +156,25 @@ const startTracking = async () => {
     console.log('Tracking started successfully');
     console.log('Current location:', currentLocation.value);
   } catch (err) {
-    error.value = err.message || 'Failed to start tracking';
     console.error('Tracking error:', err);
-    isTracking.value = false;
 
-    // Log detailed error
-    console.error('Error details:', {
-      message: error.value,
-      error: err
-    });
+    // Auto-retry after 5 seconds
+    console.log('Retrying tracking in 5 seconds...');
+    setTimeout(async () => {
+      try {
+        await LocationService.startTracking();
+        isTracking.value = true;
+        const position = await LocationService.getCurrentLocation();
+        currentLocation.value = position.coords;
+        error.value = '';
+      } catch (retryErr) {
+        error.value = 'GPS unavailable. Please enable Location/GPS in your phone settings.';
+        isTracking.value = false;
+      }
+    }, 5000);
   }
 };
+
 
 const stopTracking = async () => {
   try {
@@ -404,6 +412,17 @@ const goAccount = () => {
                 <p class="text-sm font-medium text-gray-800 break-all">{{ guardian.email }}</p>
               </div>
             </div>
+
+            <div v-if="guardian.address" class="flex items-start">
+              <svg class="w-4 h-4 text-gray-500 mr-2 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+              </svg>
+              <div>
+                <p class="text-xs text-gray-500">Address</p>
+                <p class="text-sm font-medium text-gray-800">{{ guardian.address }}</p>
+              </div>
+            </div>
           </div>
 
           <div class="mt-3 pt-3 border-t border-gray-200">
@@ -436,14 +455,6 @@ const goAccount = () => {
           </div>
         </div>
       </div>
-
-      <!-- Emergency Button -->
-      <div class="bg-white rounded-2xl shadow p-4">
-        <button class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-4 px-6 rounded-xl transition text-lg">
-          🚨 Emergency Alert
-        </button>
-      </div>
-
     </div>
 
     <div

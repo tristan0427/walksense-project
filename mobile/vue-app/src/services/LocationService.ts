@@ -181,13 +181,24 @@ class LocationService {
      */
     async getCurrentLocation(): Promise<Position> {
         console.log('Getting current location...');
-        const position = await Geolocation.getCurrentPosition({
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 0,
-        });
-        console.log('Current location:', position.coords);
-        return position;
+        try {
+            const position = await Geolocation.getCurrentPosition({
+                enableHighAccuracy: true,
+                timeout: 30000,
+                maximumAge: 10000,
+            });
+            console.log('Current location (high accuracy):', position.coords);
+            return position;
+        } catch (err) {
+            console.warn('High accuracy failed, trying low accuracy...', err);
+            const position = await Geolocation.getCurrentPosition({
+                enableHighAccuracy: false,
+                timeout: 15000,
+                maximumAge: 30000,
+            });
+            console.log('Current location (low accuracy):', position.coords);
+            return position;
+        }
     }
 
     /**

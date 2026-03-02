@@ -82,9 +82,10 @@ class AuthenticatedSessionController extends Controller
                     'role'  => $pwdUser->role,
                 ],
                 'guardian' => [
-                    'id'    => $user->id,
-                    'name'  => $user->name,
-                    'email' => $user->email,
+                    'id'      => $user->id,
+                    'name'    => $user->name,
+                    'email'   => $user->email,
+                    'address' => $user->guardian->address ?? null,
                 ]
             ]);
         }
