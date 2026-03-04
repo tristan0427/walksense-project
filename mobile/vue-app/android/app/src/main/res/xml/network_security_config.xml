@@ -9,7 +9,7 @@
 
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">172.20.129.98</domain>
-        <domain includeSubdomains="false">172.20.129.172</domain>
+        <domain includeSubdomains="false">10.116.9.172</domain>
         <domain includeSubdomains="true">localhost</domain>
         <domain includeSubdomains="true">127.0.0.1</domain>
     </domain-config>

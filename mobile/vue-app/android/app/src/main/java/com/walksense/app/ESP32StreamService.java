@@ -10,7 +10,7 @@ import java.net.Socket;
 
 public class ESP32StreamService {
     private static final String TAG = "ESP32Stream";
-    private static final String ESP32_HOST = "172.20.129.172";
+    private static final String ESP32_HOST = "10.116.9.172";
     private static final int ESP32_PORT = 81;
     private static final String ESP32_PATH = "/stream";
     private static final int MAX_FRAME_SIZE = 100000;

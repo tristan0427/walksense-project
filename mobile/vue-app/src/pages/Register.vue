@@ -1,40 +1,85 @@
 <script setup lang="ts">
-import {computed, ref} from 'vue'
+import {onMounted, computed, ref} from 'vue'
 import { useRouter } from 'vue-router'
 import axios from 'axios'
-
+interface PsgcItem {
+  code: string
+  name: string
+}
 const router = useRouter()
-
 // Form data
 const guardianForm = ref({
   firstname: '',
   lastname: '',
   middle_initial: '',
-  address: '',
+  province: '',
+  city: '',
+  barangay: '',
   email: '',
   password: '',
   password_confirmation: ''
 })
-
 const pwdForm = ref({
   firstname: '',
   lastname: '',
   middle_initial: ''
 })
-
 const loading = ref(false)
 const errorMessage = ref('')
 const showPassword = ref(false)
 const showConfirmPassword = ref(false)
-
-// Configure axios base URL
-// axios.defaults.baseURL = 'http://172.23.172.98:8000'
-// axios.defaults.baseURL = 'http://192.168.1.7:8000'
+const provinces = ref<PsgcItem[]>([])
+const cities = ref<PsgcItem[]>([])
+const barangays = ref<PsgcItem[]>([])
+const loadingAddress = ref(false)
 axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL
 axios.defaults.headers.common['Accept'] = 'application/json'
 axios.defaults.headers.common['Content-Type'] = 'application/json'
-
-
+// Load provinces on mount
+onMounted(async () => {
+  try {
+    loadingAddress.value = true
+    const res = await fetch('https://psgc.gitlab.io/api/provinces')
+    const data: PsgcItem[] = await res.json()
+    provinces.value = data.sort((a, b) => a.name.localeCompare(b.name))
+  } catch (err) {
+    console.error('Failed to load provinces:', err)
+  } finally {
+    loadingAddress.value = false
+  }
+})
+const onProvinceChange = async () => {
+  guardianForm.value.city = ''
+  guardianForm.value.barangay = ''
+  cities.value = []
+  barangays.value = []
+  if (!guardianForm.value.province) return
+  try {
+    loadingAddress.value = true
+    const res = await fetch(`https://psgc.gitlab.io/api/provinces/${guardianForm.value.province}/cities-municipalities`)
+    const data: PsgcItem[] = await res.json()
+    cities.value = data.sort((a, b) => a.name.localeCompare(b.name))
+  } catch (err) {
+    console.error('Failed to load cities:', err)
+  } finally {
+    loadingAddress.value = false
+  }
+}
+const onCityChange = async () => {
+  guardianForm.value.barangay = ''
+  barangays.value = []
+  if (!guardianForm.value.city) return
+  try {
+    loadingAddress.value = true
+    const res = await fetch(`https://psgc.gitlab.io/api/cities-municipalities/${guardianForm.value.city}/barangays`)
+    const data: PsgcItem[] = await res.json()
+    barangays.value = data.sort((a, b) => a.name.localeCompare(b.name))
+  } catch (err) {
+    console.error('Failed to load barangays:', err)
+  } finally {
+    loadingAddress.value = false
+  }
+}
 const passwordChecks = computed(() => ({
   minLength: guardianForm.value.password.length >= 8,
   hasUppercase: /[A-Z]/.test(guardianForm.value.password),
@@ -42,12 +87,9 @@ const passwordChecks = computed(() => ({
   hasNumber: /[0-9]/.test(guardianForm.value.password),
   hasSpecial: /[!@#$%^&*(),.?":{}|<>]/.test(guardianForm.value.password),
 }))
-
-
 const isPasswordValid = computed(() => {
   return Object.values(passwordChecks.value).every(check => check)
 })
-
 const passwordStrength = computed(() => {
   const checks = Object.values(passwordChecks.value).filter(v => v).length
   if (checks === 0) return { label: '', color: '' }
@@ -56,16 +98,13 @@ const passwordStrength = computed(() => {
   if (checks <= 4) return { label: 'Good', color: 'text-blue-600' }
   return { label: 'Strong', color: 'text-green-600' }
 })
-
 const passwordsMatch = computed(() => {
   if(!guardianForm.value.password_confirmation) return null
   return guardianForm.value.password === guardianForm.value.password_confirmation
 })
-
 const goBack = () => {
   router.push('/')
 }
-
 const validateForm = () => {
   // Guardian validation
   if (!guardianForm.value.firstname || !guardianForm.value.lastname ||
@@ -73,44 +112,43 @@ const validateForm = () => {
     errorMessage.value = 'Please fill in all required Guardian fields'
     return false
   }
-
+  // Address validation
+  if (!guardianForm.value.province || !guardianForm.value.city || !guardianForm.value.barangay) {
+    errorMessage.value = 'Please select your complete address (Province, City, and Barangay)'
+    return false
+  }
   // Password requirements check
   if (!isPasswordValid.value) {
     errorMessage.value = 'Password must meet all security requirements'
     return false
   }
-
   // Password match validation
   if (!passwordsMatch.value) {
     errorMessage.value = 'Passwords do not match'
     return false
   }
-
   // PWD validation
   if (!pwdForm.value.firstname || !pwdForm.value.lastname) {
     errorMessage.value = 'Please fill in all required Visually Impaired fields'
     return false
   }
-
   return true
 }
-
 const handleRegister = async () => {
   errorMessage.value = ''
-
   if (!validateForm()) {
     return
   }
-
   loading.value = true
-
   try {
-    const response = await axios.post('/api/register', {
+    const selectedProvince = provinces.value.find((p: any) => p.code === guardianForm.value.province)
+    const selectedCity = cities.value.find((c: any) => c.code === guardianForm.value.city)
+    await axios.post('/api/register', {
       guardian: {
         firstname: guardianForm.value.firstname,
         lastname: guardianForm.value.lastname,
         middle_initial: guardianForm.value.middle_initial,
-        address: guardianForm.value.address,
+        address: `${guardianForm.value.barangay}, ${selectedCity?.name}, ${selectedProvince?.name}`,
         email: guardianForm.value.email,
         password: guardianForm.value.password,
         password_confirmation: guardianForm.value.password_confirmation
@@ -121,18 +159,14 @@ const handleRegister = async () => {
         middle_initial: pwdForm.value.middle_initial
       }
     })
-
     await router.push({
       name: 'OTP',
       query: {
         email: guardianForm.value.email
       }
     })
-
-
   } catch (error: any) {
     console.error('Registration error:', error)
-
     if (error.response) {
       errorMessage.value = error.response.data?.message || 'Registration failed'
     } else if (error.request) {
@@ -145,7 +179,6 @@ const handleRegister = async () => {
   }
 }
 </script>
-
 <template>
   <div class="min-h-screen flex flex-col bg-[#f7d686] px-6 py-6 overflow-y-auto">
     <!-- Back Button -->
@@ -163,7 +196,6 @@ const handleRegister = async () => {
       </svg>
       <span class="font-medium">Back</span>
     </button>
-
     <!-- Main Content -->
     <div class="flex-1 flex flex-col pb-8">
       <!-- Header -->
@@ -175,19 +207,15 @@ const handleRegister = async () => {
           <span class="text-black">WALKSENSE!</span>
         </h2>
       </div>
-
       <!-- Error Message -->
       <div v-if="errorMessage" class="w-full max-w-md mx-auto mb-4 p-3 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm">
         {{ errorMessage }}
       </div>
-
       <!-- Registration Form -->
       <form @submit.prevent="handleRegister" class="w-full max-w-md mx-auto space-y-6">
-
         <!-- Guardian Section -->
         <div class="space-y-4">
           <h3 class="text-lg font-semibold">For the Guardian</h3>
-
           <div class="space-y-1">
             <input
                 v-model="guardianForm.firstname"
@@ -197,7 +225,6 @@ const handleRegister = async () => {
                 required
             />
           </div>
-
           <div class="space-y-1">
             <input
                 v-model="guardianForm.lastname"
@@ -207,7 +234,6 @@ const handleRegister = async () => {
                 required
             />
           </div>
-
           <div class="space-y-1">
             <input
                 v-model="guardianForm.middle_initial"
@@ -217,16 +243,46 @@ const handleRegister = async () => {
                 class="w-full px-4 py-3 bg-transparent border-b-2 border-gray-800 focus:outline-none focus:border-black placeholder:text-gray-700 text-sm"
             />
           </div>
-
           <div class="space-y-1">
-            <input
-                v-model="guardianForm.address"
-                type="text"
-                placeholder="address"
-                class="w-full px-4 py-3 bg-transparent border-b-2 border-gray-800 focus:outline-none focus:border-black placeholder:text-gray-700 text-sm"
-            />
+            <select
+                v-model="guardianForm.province"
+                @change="onProvinceChange"
+                class="w-full px-4 py-3 bg-transparent border-b-2 border-gray-800 focus:outline-none focus:border-black text-sm"
+                required
+            >
+              <option value="" disabled>Select Province</option>
+              <option v-for="prov in provinces" :key="prov.code" :value="prov.code">
+                {{ prov.name }}
+              </option>
+            </select>
           </div>
-
+          <div class="space-y-1">
+            <select
+                v-model="guardianForm.city"
+                @change="onCityChange"
+                :disabled="!guardianForm.province"
+                class="w-full px-4 py-3 bg-transparent border-b-2 border-gray-800 focus:outline-none focus:border-black text-sm disabled:opacity-50"
+                required
+            >
+              <option value="" disabled>Select City/Municipality</option>
+              <option v-for="city in cities" :key="city.code" :value="city.code">
+                {{ city.name }}
+              </option>
+            </select>
+          </div>
+          <div class="space-y-1">
+            <select
+                v-model="guardianForm.barangay"
+                :disabled="!guardianForm.city"
+                class="w-full px-4 py-3 bg-transparent border-b-2 border-gray-800 focus:outline-none focus:border-black text-sm disabled:opacity-50"
+                required
+            >
+              <option value="" disabled>Select Barangay</option>
+              <option v-for="brgy in barangays" :key="brgy.code" :value="brgy.name">
+                {{ brgy.name }}
+              </option>
+            </select>
+          </div>
           <div class="space-y-1">
             <input
                 v-model="guardianForm.email"
@@ -236,7 +292,6 @@ const handleRegister = async () => {
                 required
             />
           </div>
-
           <div class="space-y-1 relative">
             <input
                 v-model="guardianForm.password"
@@ -262,7 +317,6 @@ const handleRegister = async () => {
               </svg>
             </button>
           </div>
-
           <div v-if="guardianForm.password" class="mt-3 p-4 bg-gray-50 rounded-lg border-2 border-gray-200 space-y-2">
             <div class="flex items-center justify-between mb-2">
               <span class="text-xs font-semibold text-gray-700">Password Strength:</span>
@@ -270,7 +324,6 @@ const handleRegister = async () => {
                 {{ passwordStrength.label }}
               </span>
             </div>
-
             <div class="space-y-1.5">
               <div class="flex items-center gap-2">
                 <svg :class="['w-4 h-4 shrink-0', passwordChecks.minLength ? 'text-green-600' : 'text-gray-400']" fill="currentColor" viewBox="0 0 20 20">
@@ -280,7 +333,6 @@ const handleRegister = async () => {
                   At least 8 characters
                 </span>
               </div>
-
               <div class="flex items-center gap-2">
                 <svg :class="['w-4 h-4 shrink-0', passwordChecks.hasUppercase ? 'text-green-600' : 'text-gray-400']" fill="currentColor" viewBox="0 0 20 20">
                   <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
@@ -289,7 +341,6 @@ const handleRegister = async () => {
                   One uppercase letter (A-Z)
                 </span>
               </div>
-
               <div class="flex items-center gap-2">
                 <svg :class="['w-4 h-4 shrink-0', passwordChecks.hasLowercase ? 'text-green-600' : 'text-gray-400']" fill="currentColor" viewBox="0 0 20 20">
                   <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
@@ -298,7 +349,6 @@ const handleRegister = async () => {
                   One lowercase letter (a-z)
                 </span>
               </div>
-
               <div class="flex items-center gap-2">
                 <svg :class="['w-4 h-4 shrink-0', passwordChecks.hasNumber ? 'text-green-600' : 'text-gray-400']" fill="currentColor" viewBox="0 0 20 20">
                   <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
@@ -307,7 +357,6 @@ const handleRegister = async () => {
                   One number (0-9)
                 </span>
               </div>
-
               <div class="flex items-center gap-2">
                 <svg :class="['w-4 h-4 shrink-0', passwordChecks.hasSpecial ? 'text-green-600' : 'text-gray-400']" fill="currentColor" viewBox="0 0 20 20">
                   <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/>
@@ -318,7 +367,6 @@ const handleRegister = async () => {
               </div>
             </div>
           </div>
-
           <div class="space-y-1 relative">
             <input
                 v-model="guardianForm.password_confirmation"
@@ -344,7 +392,6 @@ const handleRegister = async () => {
               </svg>
             </button>
           </div>
-
           <div v-if="guardianForm.password_confirmation" class="mt-2">
             <div v-if="passwordsMatch" class="flex items-center gap-2 text-green-600">
               <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
@@ -360,11 +407,9 @@ const handleRegister = async () => {
             </div>
           </div>
         </div>
-
         <!-- PWD Section -->
         <div class="space-y-4 pt-6">
           <h3 class="text-lg font-semibold">For the Visually Impaired</h3>
-
           <div class="space-y-1">
             <input
                 v-model="pwdForm.firstname"
@@ -374,7 +419,6 @@ const handleRegister = async () => {
                 required
             />
           </div>
-
           <div class="space-y-1">
             <input
                 v-model="pwdForm.lastname"
@@ -384,7 +428,6 @@ const handleRegister = async () => {
                 required
             />
           </div>
-
           <div class="space-y-1">
             <input
                 v-model="pwdForm.middle_initial"
@@ -395,7 +438,6 @@ const handleRegister = async () => {
             />
           </div>
         </div>
-
         <!-- Register Button -->
         <button
             type="submit"
@@ -405,7 +447,6 @@ const handleRegister = async () => {
           {{ loading ? 'Registering...' : 'Register' }}
         </button>
       </form>
-
       <!-- Login Link -->
       <div class="w-full max-w-md mx-auto mt-6 text-center">
         <p class="text-sm">

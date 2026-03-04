@@ -432,10 +432,6 @@ const refreshLocations = () => {
 <style>
 @import 'leaflet/dist/leaflet.css';
 
-.leaflet-control-attribution {
-  display: none !important;
-}
-
 @keyframes fadeIn {
   from {
     opacity: 0;
