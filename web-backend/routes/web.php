@@ -25,7 +25,7 @@ Route::middleware('auth:sanctum')->group(function () {
 
 
 Route::get('/', function () {
-    return view('welcome');
+    return \Inertia\Inertia::render('Welcome');
 });
 
 Route::get('/dashboard', function () {
