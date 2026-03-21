@@ -18,18 +18,48 @@ import java.nio.MappedByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.Inet4Address;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.net.NetworkInterface;
+import java.net.Socket;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+
 @CapacitorPlugin(name = "ObjectDetection")
 public class ObjectDetectionPlugin extends Plugin {
 
     private static final String TAG = "ObjectDetection";
-    private static final int INPUT_SIZE = 640;
+    private static final int INPUT_SIZE = 320;
+
+    // Camera type constants
+    public static final String CAM_DAY   = "day";
+    public static final String CAM_NIGHT = "night";
 
     private Interpreter tflite;
-    private ESP32StreamService streamService;
-    private Bitmap latestFrame;
-    private final Object frameLock = new Object(); // Lock for thread safety
-    private boolean isModelLoaded = false;
-    private boolean firstFrameReceived = false;
+
+    // Two independent stream services
+    private ESP32StreamService dayStreamService;
+    private ESP32StreamService nightStreamService;
+
+    // Two independent frame buffers
+    private Bitmap latestDayFrame;
+    private Bitmap latestNightFrame;
+    private final Object dayFrameLock   = new Object();
+    private final Object nightFrameLock = new Object();
+
+    // Which camera is currently feeding the YOLO model
+    private String activeCamera = CAM_DAY;
+
+    private boolean isModelLoaded        = false;
+    private boolean dayFirstFrame        = false;
+    private boolean nightFirstFrame      = false;
 
     // ===== Distance & Direction =====
 
@@ -42,10 +72,9 @@ public class ObjectDetectionPlugin extends Plugin {
     }
 
     private String getDirection(float centerX, int frameWidth) {
-        float leftThird = frameWidth / 3.0f;
+        float leftThird  = frameWidth / 3.0f;
         float rightThird = (frameWidth * 2.0f) / 3.0f;
-
-        if (centerX < leftThird) return "left side";
+        if (centerX < leftThird)  return "left side";
         else if (centerX > rightThird) return "right side";
         else return "ahead";
     }
@@ -56,84 +85,68 @@ public class ObjectDetectionPlugin extends Plugin {
     public void loadModel(PluginCall call) {
         try {
             Log.d(TAG, "Loading TFLite model...");
-
-            MappedByteBuffer model = FileUtil.loadMappedFile(
-                    getContext(),
-                    "best_float16.tflite"
-            );
-
+            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "best_float16.tflite");
             Interpreter.Options options = new Interpreter.Options();
             options.setNumThreads(4);
-
             tflite = new Interpreter(model, options);
             isModelLoaded = true;
-
             Log.d(TAG, "✓ Model loaded");
-
             JSObject ret = new JSObject();
             ret.put("success", true);
             call.resolve(ret);
-
         } catch (Exception e) {
             Log.e(TAG, "Model load failed", e);
             call.reject("Failed to load model: " + e.getMessage());
         }
     }
 
-    // ===== ESP32 Stream =====
+    // ===== Start Day Stream =====
 
     @PluginMethod
-    public void startESP32Stream(PluginCall call) {
-        Log.d(TAG, "Starting ESP32 stream...");
+    public void startDayStream(PluginCall call) {
+        String ip = call.getString("ip");
+        if (ip == null || ip.isEmpty()) {
+            call.reject("Missing 'ip' parameter for day camera");
+            return;
+        }
 
-        firstFrameReceived = false; // reset in case stream restarts
-        streamService = new ESP32StreamService();
+        Log.d(TAG, "Starting DAY stream from: " + ip);
+        dayFirstFrame = false;
 
-        streamService.startStream(new ESP32StreamService.StreamCallback() {
+        if (dayStreamService != null) dayStreamService.stopStream();
+        dayStreamService = new ESP32StreamService(ip, getContext());
 
+        dayStreamService.startStream(new ESP32StreamService.StreamCallback() {
             @Override
             public void onFrameReceived(Bitmap frame) {
-                synchronized (frameLock) {
-                    // Create a safe copy of the frame
-                    Bitmap frameCopy = frame.copy(Bitmap.Config.ARGB_8888, false);
-
-                    // Recycle old frame if it exists
-                    if (latestFrame != null && !latestFrame.isRecycled()) {
-                        latestFrame.recycle();
-                    }
-
-                    // Store the copy
-                    latestFrame = frameCopy;
-
-                    // Recycle the original frame if it's different from the copy
-                    if (frame != frameCopy && !frame.isRecycled()) {
-                        frame.recycle();
-                    }
+                synchronized (dayFrameLock) {
+                    Bitmap copy = frame.copy(Bitmap.Config.ARGB_8888, false);
+                    if (latestDayFrame != null && !latestDayFrame.isRecycled()) latestDayFrame.recycle();
+                    latestDayFrame = copy;
+                    if (frame != copy && !frame.isRecycled()) frame.recycle();
                 }
-
-                // ✅ Notify Vue only after the FIRST real frame arrives
-                if (!firstFrameReceived) {
-                    firstFrameReceived = true;
-                    Log.d(TAG, "✓ First frame received — notifying Vue");
+                if (!dayFirstFrame) {
+                    dayFirstFrame = true;
+                    Log.d(TAG, "✓ Day camera first frame");
                     JSObject ret = new JSObject();
                     ret.put("status", "connected");
-                    notifyListeners("streamConnected", ret);
+                    ret.put("camera", CAM_DAY);
+                    notifyListeners("dayCamConnected", ret);
                 }
             }
 
             @Override
             public void onError(String error) {
-                Log.e(TAG, "Stream error: " + error);
+                Log.e(TAG, "Day stream error: " + error);
                 JSObject ret = new JSObject();
                 ret.put("error", error);
-                notifyListeners("streamError", ret);
+                ret.put("camera", CAM_DAY);
+                notifyListeners("dayCamError", ret);
             }
 
             @Override
             public void onConnected() {
-                // ✅ HTTP connected but no frame yet — do NOT notify Vue here
-                // Vue will be notified only when first frame arrives in onFrameReceived
-                Log.d(TAG, "HTTP connected, waiting for first frame...");
+                Log.d(TAG, "Day cam HTTP connected, waiting for first frame...");
             }
         });
 
@@ -142,10 +155,149 @@ public class ObjectDetectionPlugin extends Plugin {
         call.resolve(ret);
     }
 
+    // ===== Start Night Stream =====
+
+    @PluginMethod
+    public void startNightStream(PluginCall call) {
+        String ip = call.getString("ip");
+        if (ip == null || ip.isEmpty()) {
+            call.reject("Missing 'ip' parameter for night camera");
+            return;
+        }
+
+        Log.d(TAG, "Starting NIGHT stream from: " + ip);
+        nightFirstFrame = false;
+
+        if (nightStreamService != null) nightStreamService.stopStream();
+        nightStreamService = new ESP32StreamService(ip, getContext());
+
+        nightStreamService.startStream(new ESP32StreamService.StreamCallback() {
+            @Override
+            public void onFrameReceived(Bitmap frame) {
+                synchronized (nightFrameLock) {
+                    Bitmap copy = frame.copy(Bitmap.Config.ARGB_8888, false);
+                    if (latestNightFrame != null && !latestNightFrame.isRecycled()) latestNightFrame.recycle();
+                    latestNightFrame = copy;
+                    if (frame != copy && !frame.isRecycled()) frame.recycle();
+                }
+                if (!nightFirstFrame) {
+                    nightFirstFrame = true;
+                    Log.d(TAG, "✓ Night camera first frame");
+                    JSObject ret = new JSObject();
+                    ret.put("status", "connected");
+                    ret.put("camera", CAM_NIGHT);
+                    notifyListeners("nightCamConnected", ret);
+                }
+            }
+
+            @Override
+            public void onError(String error) {
+                Log.e(TAG, "Night stream error: " + error);
+                JSObject ret = new JSObject();
+                ret.put("error", error);
+                ret.put("camera", CAM_NIGHT);
+                notifyListeners("nightCamError", ret);
+            }
+
+            @Override
+            public void onConnected() {
+                Log.d(TAG, "Night cam HTTP connected, waiting for first frame...");
+            }
+        });
+
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        call.resolve(ret);
+    }
+
+    // ===== Legacy single-stream method (kept for backward compatibility) =====
+
+    @PluginMethod
+    public void startESP32Stream(PluginCall call) {
+        // Legacy compatibility — delegates to startDayStream
+        // Prefer startDayStream / startNightStream going forward
+        String ip = call.getString("ip", "192.168.43.101");
+
+        if (ip == null || ip.isEmpty()) {
+            call.reject("Missing 'ip' parameter for day camera");
+            return;
+        }
+
+        Log.d(TAG, "Starting DAY stream (legacy) from: " + ip);
+        dayFirstFrame = false;
+
+        if (dayStreamService != null) dayStreamService.stopStream();
+        dayStreamService = new ESP32StreamService(ip, getContext());
+
+        dayStreamService.startStream(new ESP32StreamService.StreamCallback() {
+            @Override
+            public void onFrameReceived(Bitmap frame) {
+                synchronized (dayFrameLock) {
+                    Bitmap copy = frame.copy(Bitmap.Config.ARGB_8888, false);
+                    if (latestDayFrame != null && !latestDayFrame.isRecycled()) latestDayFrame.recycle();
+                    latestDayFrame = copy;
+                    if (frame != copy && !frame.isRecycled()) frame.recycle();
+                }
+                if (!dayFirstFrame) {
+                    dayFirstFrame = true;
+                    Log.d(TAG, "✓ Day camera first frame (legacy stream)");
+                    JSObject ret = new JSObject();
+                    ret.put("status", "connected");
+                    ret.put("camera", CAM_DAY);
+                    notifyListeners("dayCamConnected", ret);
+                }
+            }
+
+            @Override
+            public void onError(String error) {
+                Log.e(TAG, "Day stream error: " + error);
+                JSObject ret = new JSObject();
+                ret.put("error", error);
+                ret.put("camera", CAM_DAY);
+                notifyListeners("dayCamError", ret);
+            }
+
+            @Override
+            public void onConnected() {
+                Log.d(TAG, "Day cam HTTP connected, waiting for first frame...");
+            }
+        });
+
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        call.resolve(ret);
+    }
+
+    // ===== Switch Active Camera =====
+
+    /**
+     * Called from Vue when BH1750 lux value crosses the day/night threshold.
+     * Switches which camera's frames are fed into the YOLO model.
+     * Both streams keep running at all times.
+     *
+     * @param call expects { "camera": "day" | "night" }
+     */
+    @PluginMethod
+    public void switchActiveCamera(PluginCall call) {
+        String cam = call.getString("camera", CAM_DAY);
+        if (!cam.equals(CAM_DAY) && !cam.equals(CAM_NIGHT)) {
+            call.reject("Invalid camera value. Use 'day' or 'night'.");
+            return;
+        }
+
+        activeCamera = cam;
+        Log.d(TAG, "✓ Active camera switched to: " + cam);
+
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        ret.put("activeCamera", activeCamera);
+        call.resolve(ret);
+    }
+
     // ===== Detection =====
 
     @PluginMethod
-       public void detectFromStream(PluginCall call) {
+    public void detectFromStream(PluginCall call) {
         if (!isModelLoaded) {
             call.reject("Model not loaded");
             return;
@@ -153,74 +305,233 @@ public class ObjectDetectionPlugin extends Plugin {
 
         Bitmap frameToProcess = null;
 
-        // Safely get a copy of the latest frame
-        synchronized (frameLock) {
-            if (latestFrame == null || latestFrame.isRecycled()) {
-                call.reject("No valid frame available");
-                return;
+        // Pull frame from whichever camera is currently active
+        if (activeCamera.equals(CAM_NIGHT)) {
+            synchronized (nightFrameLock) {
+                if (latestNightFrame == null || latestNightFrame.isRecycled()) {
+                    call.reject("No valid night frame available");
+                    return;
+                }
+                frameToProcess = latestNightFrame.copy(latestNightFrame.getConfig(), false);
             }
-            // Create a mutable copy for processing
-            frameToProcess = latestFrame.copy(latestFrame.getConfig(), false);
+        } else {
+            synchronized (dayFrameLock) {
+                if (latestDayFrame == null || latestDayFrame.isRecycled()) {
+                    call.reject("No valid day frame available");
+                    return;
+                }
+                frameToProcess = latestDayFrame.copy(latestDayFrame.getConfig(), false);
+            }
         }
 
         Bitmap resized = null;
         try {
             resized = Bitmap.createScaledBitmap(frameToProcess, INPUT_SIZE, INPUT_SIZE, true);
-
             ByteBuffer inputBuffer = convertBitmapToByteBuffer(resized);
 
-            // Log input buffer info
-            Log.d(TAG, "Input buffer size: " + inputBuffer.capacity());
-
-            // Model outputs [1][22][8400] — confirmed from logcat
-            float[][][] outputTransposed = new float[1][22][8400];
+            float[][][] outputTransposed = new float[1][21][2100];
             tflite.run(inputBuffer, outputTransposed);
-            Log.d(TAG, "Ran inference with shape [1][22][8400]");
 
-
-            // Post-process
             Double confidenceParam = call.getDouble("confidence", 0.3);
             float confidenceThreshold = confidenceParam != null ? confidenceParam.floatValue() : 0.3f;
 
             List<Detection> detections = postProcessTransposed(outputTransposed[0], confidenceThreshold);
-            Log.d(TAG, "Number of detections: " + detections.size());
+            Log.d(TAG, "Detections [" + activeCamera + "]: " + detections.size());
 
-            // Find nearest
             Detection nearest = findNearestObject(detections);
 
             JSObject ret = new JSObject();
-
             if (nearest != null) {
-                float bboxArea = (nearest.x2 - nearest.x1) * (nearest.y2 - nearest.y1);
+                float bboxArea  = (nearest.x2 - nearest.x1) * (nearest.y2 - nearest.y1);
                 float frameArea = INPUT_SIZE * INPUT_SIZE;
 
-                String distance = estimateDistance(bboxArea, frameArea);
+                String distance  = estimateDistance(bboxArea, frameArea);
                 String direction = getDirection((nearest.x1 + nearest.x2) / 2, INPUT_SIZE);
 
                 JSObject nearestObj = new JSObject();
-                nearestObj.put("class", nearest.className);
-                nearestObj.put("distance", distance);
-                nearestObj.put("direction", direction);
+                nearestObj.put("class",      nearest.className);
+                nearestObj.put("distance",   distance);
+                nearestObj.put("direction",  direction);
                 nearestObj.put("confidence", nearest.confidence);
+                nearestObj.put("camera",     activeCamera);  // tell Vue which cam detected it
 
                 ret.put("nearest", nearestObj);
             }
 
             ret.put("success", true);
+            ret.put("activeCamera", activeCamera);
             call.resolve(ret);
 
         } catch (Exception e) {
             Log.e(TAG, "Detection failed", e);
             call.reject("Detection error: " + e.getMessage());
         } finally {
-
-            if (resized != null && !resized.isRecycled()) {
-                resized.recycle();
-            }
-            if (frameToProcess != null && !frameToProcess.isRecycled()) {
-                frameToProcess.recycle();
-            }
+            if (resized != null && !resized.isRecycled()) resized.recycle();
+            if (frameToProcess != null && !frameToProcess.isRecycled()) frameToProcess.recycle();
         }
+    }
+
+    // ===== Native Hotspot Network Scanner =====
+
+    /**
+     * Scans the phone's hotspot network for WalkSense boards using raw TCP sockets.
+     * This bypasses CapacitorHttp's broken cellular routing by using the same
+     * native Socket path that ESP32StreamService uses (proven to work).
+     *
+     * Auto-detects the hotspot subnet via NetworkInterface enumeration.
+     */
+    @PluginMethod
+    public void scanHotspotNetwork(PluginCall call) {
+        final int port = call.getInt("port", 82);
+        final String path = call.getString("path", "/identity");
+        final int timeout = call.getInt("timeout", 2000);
+
+        new Thread(() -> {
+            try {
+                // Find all local subnets (hotspot, WiFi, etc.)
+                List<String> subnets = findLocalSubnets();
+                if (subnets.isEmpty()) {
+                    call.reject("No local network interfaces found");
+                    return;
+                }
+
+                Log.d(TAG, "[Scanner] Found " + subnets.size() + " local subnet(s): " + subnets);
+
+                List<JSObject> allResults = new ArrayList<>();
+
+                for (String subnet : subnets) {
+                    Log.d(TAG, "[Scanner] Scanning " + subnet + ".1-254 on port " + port);
+
+                    ExecutorService executor = Executors.newFixedThreadPool(30);
+                    List<Future<JSObject>> futures = new ArrayList<>();
+
+                    for (int i = 1; i <= 254; i++) {
+                        final String ip = subnet + "." + i;
+                        futures.add(executor.submit(() -> pingHost(ip, port, path, timeout)));
+                    }
+
+                    for (Future<JSObject> future : futures) {
+                        try {
+                            JSObject result = future.get(timeout + 1000, TimeUnit.MILLISECONDS);
+                            if (result != null) {
+                                allResults.add(result);
+                                Log.d(TAG, "[Scanner] ✅ Found board: " + result.toString());
+                            }
+                        } catch (Exception e) {
+                            // timeout or error — expected for dead IPs
+                        }
+                    }
+
+                    executor.shutdownNow();
+
+                    // Stop scanning remaining subnets if both cameras found
+                    if (allResults.size() >= 2) {
+                        Log.d(TAG, "[Scanner] Both cameras found — stopping early.");
+                        break;
+                    }
+                }
+
+                Log.d(TAG, "[Scanner] Scan complete. Found " + allResults.size() + " board(s).");
+
+                JSObject ret = new JSObject();
+                ret.put("success", true);
+                com.getcapacitor.JSArray arr = new com.getcapacitor.JSArray();
+                for (JSObject r : allResults) {
+                    arr.put(r);
+                }
+                ret.put("boards", arr);
+                call.resolve(ret);
+
+            } catch (Exception e) {
+                Log.e(TAG, "[Scanner] Scan failed: " + e.getMessage());
+                call.reject("Scan failed: " + e.getMessage());
+            }
+        }).start();
+    }
+
+    /**
+     * Finds all local /24 subnets by enumerating network interfaces.
+     * Returns subnets like ["10.199.223", "192.168.43"].
+     */
+    private List<String> findLocalSubnets() {
+        List<String> subnets = new ArrayList<>();
+        try {
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface ni = interfaces.nextElement();
+                if (ni.isLoopback() || !ni.isUp()) continue;
+
+                // Skip cellular interfaces (common names)
+                String name = ni.getName().toLowerCase();
+                if (name.startsWith("rmnet") || name.startsWith("ccmni") || name.startsWith("v4-rmnet")) {
+                    Log.d(TAG, "[Scanner] Skipping cellular interface: " + name);
+                    continue;
+                }
+
+                Enumeration<InetAddress> addresses = ni.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress addr = addresses.nextElement();
+                    if (addr instanceof Inet4Address && addr.isSiteLocalAddress()) {
+                        String ip = addr.getHostAddress();
+                        String[] parts = ip.split("\\.");
+                        if (parts.length == 4) {
+                            String subnet = parts[0] + "." + parts[1] + "." + parts[2];
+                            if (!subnets.contains(subnet)) {
+                                subnets.add(subnet);
+                                Log.d(TAG, "[Scanner] Found local subnet: " + subnet
+                                        + " on interface " + ni.getName() + " (IP: " + ip + ")");
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "[Scanner] Error enumerating interfaces: " + e.getMessage());
+        }
+        return subnets;
+    }
+
+    /**
+     * Pings a single host on the given port/path using a raw TCP Socket.
+     * Returns a JSObject with the parsed JSON response, or null on failure.
+     */
+    private JSObject pingHost(String ip, int port, String path, int timeout) {
+        Socket socket = null;
+        try {
+            socket = new Socket();
+            socket.connect(new InetSocketAddress(ip, port), timeout);
+            socket.setSoTimeout(timeout);
+
+            // Send HTTP GET
+            OutputStream out = socket.getOutputStream();
+            String request = "GET " + path + " HTTP/1.1\r\n"
+                    + "Host: " + ip + ":" + port + "\r\n"
+                    + "Connection: close\r\n\r\n";
+            out.write(request.getBytes());
+            out.flush();
+
+            // Read response
+            InputStream in = socket.getInputStream();
+            StringBuilder response = new StringBuilder();
+            byte[] buffer = new byte[4096];
+            int bytesRead;
+            while ((bytesRead = in.read(buffer)) != -1) {
+                response.append(new String(buffer, 0, bytesRead));
+            }
+
+            // Extract JSON body (after HTTP headers)
+            String responseStr = response.toString();
+            int bodyStart = responseStr.indexOf("\r\n\r\n");
+            if (bodyStart >= 0) {
+                String body = responseStr.substring(bodyStart + 4).trim();
+                return new JSObject(body);
+            }
+        } catch (Exception e) {
+            // Connection refused or timeout — expected for dead IPs
+        } finally {
+            try { if (socket != null) socket.close(); } catch (Exception ignored) {}
+        }
+        return null;
     }
 
     // ===== Helper Methods =====
@@ -228,38 +539,32 @@ public class ObjectDetectionPlugin extends Plugin {
     private ByteBuffer convertBitmapToByteBuffer(Bitmap bitmap) {
         ByteBuffer byteBuffer = ByteBuffer.allocateDirect(4 * INPUT_SIZE * INPUT_SIZE * 3);
         byteBuffer.order(ByteOrder.nativeOrder());
-
         int[] intValues = new int[INPUT_SIZE * INPUT_SIZE];
         bitmap.getPixels(intValues, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
-
         int pixel = 0;
         for (int i = 0; i < INPUT_SIZE; ++i) {
             for (int j = 0; j < INPUT_SIZE; ++j) {
                 final int val = intValues[pixel++];
                 byteBuffer.putFloat(((val >> 16) & 0xFF) / 255.0f);
-                byteBuffer.putFloat(((val >> 8) & 0xFF) / 255.0f);
-                byteBuffer.putFloat((val & 0xFF) / 255.0f);
+                byteBuffer.putFloat(((val >> 8)  & 0xFF) / 255.0f);
+                byteBuffer.putFloat((val & 0xFF)          / 255.0f);
             }
         }
-
         return byteBuffer;
     }
 
     private List<Detection> postProcessTransposed(float[][] output, float threshold) {
         List<Detection> detections = new ArrayList<>();
-
-        int numDetections = output[0].length; // 8400 anchors
-
+        int numDetections = output[0].length;
         for (int i = 0; i < numDetections; i++) {
             float cx = output[0][i];
             float cy = output[1][i];
             float w  = output[2][i];
             float h  = output[3][i];
 
-            // YOLOv8 has NO objectness score — class scores start at row 4
             int classId = 0;
             float maxClassScore = output[4][i];
-            for (int j = 5; j < 22; j++) {
+            for (int j = 5; j < 21; j++) {
                 if (output[j][i] > maxClassScore) {
                     maxClassScore = output[j][i];
                     classId = j - 4;
@@ -268,67 +573,51 @@ public class ObjectDetectionPlugin extends Plugin {
 
             if (maxClassScore < threshold) continue;
 
-            // Convert from normalized coords to pixel coords
-            float x1 = (cx - w / 2) * INPUT_SIZE;
-            float y1 = (cy - h / 2) * INPUT_SIZE;
-            float x2 = (cx + w / 2) * INPUT_SIZE;
-            float y2 = (cy + h / 2) * INPUT_SIZE;
-
-            x1 = Math.max(0, Math.min(INPUT_SIZE - 1, x1));
-            y1 = Math.max(0, Math.min(INPUT_SIZE - 1, y1));
-            x2 = Math.max(0, Math.min(INPUT_SIZE - 1, x2));
-            y2 = Math.max(0, Math.min(INPUT_SIZE - 1, y2));
+            float x1 = Math.max(0, Math.min(INPUT_SIZE - 1, (cx - w / 2) * INPUT_SIZE));
+            float y1 = Math.max(0, Math.min(INPUT_SIZE - 1, (cy - h / 2) * INPUT_SIZE));
+            float x2 = Math.max(0, Math.min(INPUT_SIZE - 1, (cx + w / 2) * INPUT_SIZE));
+            float y2 = Math.max(0, Math.min(INPUT_SIZE - 1, (cy + h / 2) * INPUT_SIZE));
 
             Detection det = new Detection();
-            det.className = getClassName(classId);
+            det.className  = getClassName(classId);
             det.confidence = maxClassScore;
-            det.x1 = x1;
-            det.y1 = y1;
-            det.x2 = x2;
-            det.y2 = y2;
-
+            det.x1 = x1; det.y1 = y1;
+            det.x2 = x2; det.y2 = y2;
             detections.add(det);
         }
-
         return detections;
     }
+
     private Detection findNearestObject(List<Detection> detections) {
         if (detections.isEmpty()) return null;
-
         Detection nearest = null;
         float maxArea = 0;
-
         for (Detection det : detections) {
             float area = (det.x2 - det.x1) * (det.y2 - det.y1);
-            if (area > maxArea) {
-                maxArea = area;
-                nearest = det;
-            }
+            if (area > maxArea) { maxArea = area; nearest = det; }
         }
-
         return nearest;
     }
 
     private String getClassName(int classId) {
         String[] classes = {
-                "person",      // 0
-                "bird",        // 1
-                "car",         // 2
-                "cat",         // 3
-                "chair",       // 4
-                "dog",         // 5
-                "table",       // 6
-                "pothole",     // 7
-                "ceiling",     // 8
-                "wall",        // 9
-                "window",      // 10
-                "bollard",     // 11
-                "crosswalk",   // 12
-                "downstairs",  // 13
-                "upstairs",    // 14
-                "door",        // 15
-                "stair",       // 16
-                "pole"         // 17
+                "person",           // 0
+                "group of people",  // 1
+                "vehicle",          // 2
+                "bollards",         // 3
+                "stairs",           // 4
+                "tree",             // 5
+                "crosswalk",        // 6
+                "door",             // 7
+                "chair",            // 8
+                "couch",            // 9
+                "table",            // 10
+                "pothole",          // 11
+                "pole",             // 12
+                "cat",              // 13
+                "dog",              // 14
+                "wall",             // 15
+                "glass wall"        // 16
         };
         if (classId >= 0 && classId < classes.length) return classes[classId];
         return "obstacle";
@@ -338,18 +627,23 @@ public class ObjectDetectionPlugin extends Plugin {
 
     @PluginMethod
     public void stopESP32Stream(PluginCall call) {
-        if (streamService != null) {
-            streamService.stopStream();
-        }
+        if (dayStreamService != null)   dayStreamService.stopStream();
+        if (nightStreamService != null) nightStreamService.stopStream();
 
-        synchronized (frameLock) {
-            if (latestFrame != null && !latestFrame.isRecycled()) {
-                latestFrame.recycle();
-                latestFrame = null;
+        synchronized (dayFrameLock) {
+            if (latestDayFrame != null && !latestDayFrame.isRecycled()) {
+                latestDayFrame.recycle(); latestDayFrame = null;
+            }
+        }
+        synchronized (nightFrameLock) {
+            if (latestNightFrame != null && !latestNightFrame.isRecycled()) {
+                latestNightFrame.recycle(); latestNightFrame = null;
             }
         }
 
-        firstFrameReceived = false;
+        dayFirstFrame = false;
+        nightFirstFrame = false;
+
         JSObject ret = new JSObject();
         ret.put("success", true);
         call.resolve(ret);
@@ -357,19 +651,17 @@ public class ObjectDetectionPlugin extends Plugin {
 
     @PluginMethod
     public void unloadModel(PluginCall call) {
-        if (tflite != null) {
-            tflite.close();
-            isModelLoaded = false;
-        }
-
-        // Also clean up any remaining frames
-        synchronized (frameLock) {
-            if (latestFrame != null && !latestFrame.isRecycled()) {
-                latestFrame.recycle();
-                latestFrame = null;
+        if (tflite != null) { tflite.close(); isModelLoaded = false; }
+        synchronized (dayFrameLock) {
+            if (latestDayFrame != null && !latestDayFrame.isRecycled()) {
+                latestDayFrame.recycle(); latestDayFrame = null;
             }
         }
-
+        synchronized (nightFrameLock) {
+            if (latestNightFrame != null && !latestNightFrame.isRecycled()) {
+                latestNightFrame.recycle(); latestNightFrame = null;
+            }
+        }
         JSObject ret = new JSObject();
         ret.put("success", true);
         call.resolve(ret);

@@ -3,6 +3,7 @@ import Home from '../pages/Home.vue'
 import Login from '../pages/Login.vue'
 import Guardian_dashboard from "../pages/Guardian_dashboard.vue";
 import PwdDashboard from '../pages/PWD_dashboard.vue';
+import Wearablesetup from "@/pages/Wearablesetup.vue";
 import Register from "../pages/Register.vue";
 import OTP from "../pages/OTP.vue"
 
@@ -42,6 +43,13 @@ const routes = [
         path: '/pwd-dashboard',
         name: 'PwdDashboard',
         component: PwdDashboard,
+        meta: { requiresAuth: true, role: 'pwd' }
+    },
+
+    {
+        path: '/wearable-setup',
+        name: 'WearableSetup',
+        component: Wearablesetup,
         meta: { requiresAuth: true, role: 'pwd' }
     },
 

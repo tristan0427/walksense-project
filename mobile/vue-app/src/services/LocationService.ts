@@ -1,4 +1,4 @@
-import {Capacitor} from '@capacitor/core';
+import {Capacitor, CapacitorHttp} from '@capacitor/core';
 import {Geolocation} from '@capacitor/geolocation';
 import axios from 'axios';
 import BackgroundGeolocation from "@/native/backgroundGeolocation.ts";
@@ -238,21 +238,30 @@ class LocationService {
 
             console.log('Payload:', payload);
 
-            const response = await axios.post('/api/location', payload, {
+            const endpoint = (axios.defaults.baseURL || '') + '/api/location';
+            
+            // Use native CapacitorHttp to bypass Mixed Content restrictions
+            const response = await CapacitorHttp.post({
+                url: endpoint,
                 headers: {
                     'Authorization': `Bearer ${token}`,
                     'Content-Type': 'application/json',
                     'Accept': 'application/json',
-                }
+                },
+                data: payload,
+                connectTimeout: 10000,
+                readTimeout: 10000,
             });
 
-            console.log('Location sent successfully:', response.data);
+            if (response.status >= 200 && response.status < 300) {
+                console.log('Location sent successfully:', response.data);
+            } else {
+                throw new Error(`HTTP ${response.status}: Failed to send location`);
+            }
         } catch (error: any) {
             console.error('Failed to send location:', {
-                status: error.response?.status,
-                message: error.response?.data?.message || error.message,
-                errors: error.response?.data?.errors,
-                url: error.config?.url,
+                message: error.message || 'Unknown error',
+                details: error
             });
         }
     }

@@ -22,6 +22,15 @@ export interface ObjectDetectionPlugin {
 
     unloadModel(): Promise<{ success: boolean }>;
 
+    scanHotspotNetwork(options?: {
+        port?: number;
+        path?: string;
+        timeout?: number;
+    }): Promise<{
+        success: boolean;
+        boards: Array<{ board: string; ip: string; ble_name?: string }>;
+    }>;
+
     addListener(
         eventName: 'streamConnected',
         listenerFunc: (data: { status: string }) => void
