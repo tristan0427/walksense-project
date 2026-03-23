@@ -4,7 +4,13 @@ import type { PluginListenerHandle } from '@capacitor/core';
 export interface ObjectDetectionPlugin {
     loadModel(): Promise<{ success: boolean }>;
 
-    startESP32Stream(): Promise<{ success: boolean }>;
+    startESP32Stream(options?: { ip?: string }): Promise<{ success: boolean }>;
+
+    startDayStream(options: { ip: string }): Promise<{ success: boolean }>;
+
+    startNightStream(options: { ip: string }): Promise<{ success: boolean }>;
+
+    switchActiveCamera(options: { camera: 'day' | 'night' }): Promise<{ success: boolean; activeCamera: string }>;
 
     detectFromStream(options: {
         confidence?: number;

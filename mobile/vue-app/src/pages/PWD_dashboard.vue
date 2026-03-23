@@ -416,6 +416,16 @@ const goToWearableSetup = () => {
     <!-- Main Content -->
     <div class="p-4 space-y-4">
 
+      <!-- Online Status -->
+      <div class="bg-yellow-100 rounded-2xl shadow p-4 flex items-center">
+        <div class="w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center mr-3">
+          <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/>
+          </svg>
+        </div>
+        <p class="font-medium text-gray-800">You are Online!</p>
+      </div>
+
       <!-- Greeting -->
       <div class="bg-yellow-100 rounded-2xl shadow p-4">
         <h2 class="text-xl font-semibold text-gray-800">
@@ -562,16 +572,6 @@ const goToWearableSetup = () => {
         <div v-else class="text-gray-500 text-center py-4">
           <p>No objects detected</p>
         </div>
-      </div>
-
-      <!-- Online Status -->
-      <div class="bg-yellow-100 rounded-2xl shadow p-4 flex items-center">
-        <div class="w-10 h-10 bg-gray-800 rounded-full flex items-center justify-center mr-3">
-          <svg class="w-6 h-6 text-white" fill="currentColor" viewBox="0 0 20 20">
-            <path fill-rule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clip-rule="evenodd"/>
-          </svg>
-        </div>
-        <p class="font-medium text-gray-800">You are Online!</p>
       </div>
 
       <!-- Guardian Info -->
