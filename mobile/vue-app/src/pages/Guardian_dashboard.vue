@@ -13,6 +13,7 @@ const mapContainer = ref(null)
 const map = ref(null)
 const markers = ref(new Map())
 const pwdLocations = ref([])
+const notifications = ref([])
 const loading = ref(true)
 const error = ref('')
 const updateInterval = ref(null)
@@ -27,9 +28,11 @@ if (token) {
 onMounted(async () => {
   await initializeMap()
   await loadPwdLocations()
+  await loadNotifications()
 
   updateInterval.value = setInterval(() => {
     loadPwdLocations()
+    loadNotifications()
   },10000)
 })
 
@@ -96,6 +99,24 @@ const loadPwdLocations = async () => {
     console.error('Failed to load locations:', err)
     error.value = err.response?.data?.message || 'Failed to load locations'
     loading.value = false
+  }
+}
+
+const loadNotifications = async () => {
+  try {
+    const response = await axios.get('/api/notifications')
+    notifications.value = response.data.notifications
+  } catch(err) {
+    console.error('Failed to load notifications:', err)
+  }
+}
+
+const deleteNotification = async (id) => {
+  try {
+    await axios.delete(`/api/notifications/${id}`)
+    notifications.value = notifications.value.filter(n => n.id !== id)
+  } catch (err) {
+    console.error('Failed to delete notification:', err)
   }
 }
 
@@ -386,8 +407,50 @@ const refreshLocations = () => {
 
       <!-- Alerts -->
       <div class="bg-white rounded-2xl shadow p-4">
-        <h2 class="font-semibold text-gray-800 mb-2">Alerts</h2>
-        <p class="text-sm text-gray-600">No alerts right now</p>
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="font-semibold text-gray-800 flex items-center">
+            <svg class="w-5 h-5 text-red-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+            </svg>
+            Emergency Alerts
+          </h2>
+          <span v-if="notifications.length" class="bg-red-100 text-red-700 font-bold text-xs px-2 py-1 rounded-full">{{ notifications.length }}</span>
+        </div>
+
+        <div v-if="notifications.length === 0" class="text-center py-6">
+          <svg class="w-12 h-12 mx-auto text-gray-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p class="text-sm text-gray-500">No active alerts</p>
+        </div>
+
+        <div v-else class="space-y-3 max-h-80 overflow-y-auto pr-1">
+          <div v-for="notif in notifications" :key="notif.id" 
+               class="border border-red-200 bg-red-50 rounded-xl p-3 shadow-sm transition-all hover:shadow-md animate-fadeIn">
+            <div class="flex justify-between items-start">
+              <div>
+                <h3 class="font-bold text-red-700 flex items-center">
+                  <span class="w-2 h-2 rounded-full bg-red-600 animate-pulse mr-2"></span>
+                  Distress Signal
+                </h3>
+                <p class="text-xs text-gray-600 font-medium tracking-wide mt-1">{{ notif.pwd?.user?.name || 'Your PWD' }}</p>
+                <p class="text-[10px] text-gray-500 mt-1 uppercase">{{ new Date(notif.triggered_at).toLocaleString() }}</p>
+              </div>
+            </div>
+            
+            <div class="mt-3 flex gap-2">
+              <button @click="map && map.setView([notif.latitude, notif.longitude], 18)"
+                      v-if="notif.latitude && notif.longitude"
+                      class="flex-1 py-1.5 px-3 text-xs font-semibold rounded-lg border border-red-500 text-red-600 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-400 transition-colors">
+                Locate
+              </button>
+              <button @click="deleteNotification(notif.id)"
+                      class="py-1.5 px-3 text-xs font-semibold rounded-lg text-gray-500 hover:text-red-700 hover:bg-red-100 transition-colors">
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
     <div

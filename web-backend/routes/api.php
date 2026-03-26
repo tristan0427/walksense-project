@@ -16,6 +16,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/location', [LocationController::class, 'store'])->name('api.location.store');
     Route::post('/logout', [AuthenticatedSessionController::class, 'destroy']);
 
+    Route::post('/notifications', [\App\Http\Controllers\NotificationController::class, 'store']);
+    Route::get('/notifications', [\App\Http\Controllers\NotificationController::class, 'index']);
+    Route::delete('/notifications/{id}', [\App\Http\Controllers\NotificationController::class, 'destroy']);
+
     Route::get('/location/pwd/{pwdUserId}', [LocationController::class, 'getCurrentLocations'])->name('api.location.current');
     Route::get('/location/pwd/{pwdUserId}/history', [LocationController::class, 'getLocationHistory'])->name('api.location.history');
     Route::get('/location/all-pwds', [LocationController::class, 'getAllPwdLocations'])->name('api.location.all');

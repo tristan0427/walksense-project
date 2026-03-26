@@ -5,6 +5,13 @@ import { TextToSpeech } from '@capacitor-community/text-to-speech';
 import { CapacitorHttp } from '@capacitor/core';
 import LocationService from "../services/LocationService";
 import ObjectDetection from "../types/ObjectDetection";
+import axios from "axios";
+
+axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL;
+const token = localStorage.getItem('token');
+if (token) {
+  axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+}
 
 const router = useRouter();
 const isTracking = ref(false);
@@ -31,6 +38,9 @@ const activeCamera  = ref('day');   // 'day' | 'night'
 const currentLux    = ref(null);    // latest lux from BH1750
 const LUX_THRESHOLD = 50;           // below this → night mode
 const showIpSetup = ref(false);  // ← never auto-show
+
+const isSendingDistress = ref(false);
+const distressSent = ref(false);
 
 // ── Detection state ──────────────────────────────────────────────────────────
 const nearestObject     = ref(null);
@@ -129,6 +139,10 @@ onMounted(async () => {
     startLuxPolling();
   }
 
+  if (nightCamIp.value) {
+    startEmergencyPolling();
+  }
+
   // Start GPS tracking
   await startTracking();
 });
@@ -136,6 +150,7 @@ onMounted(async () => {
 onUnmounted(async () => {
   stopDetection();
   stopLuxPolling();
+  stopEmergencyPolling();
   await ObjectDetection.stopESP32Stream();
   await ObjectDetection.removeAllListeners();
 });
@@ -218,6 +233,94 @@ const onLuxReceived = async (lux) => {
     } catch (err) {
       console.error('Camera switch failed:', err);
     }
+  }
+};
+
+// ── Emergency Button Handling ───────────────────────────────────────────────
+
+let emergencyInterval = null;
+
+const startEmergencyPolling = () => {
+  if (emergencyInterval) return;
+  if (!nightCamIp.value) return;
+
+  emergencyInterval = setInterval(async () => {
+    try {
+      const response = await CapacitorHttp.get({
+        url: `http://${nightCamIp.value}:82/button`,
+        connectTimeout: 2000,
+        readTimeout: 2000
+      });
+      
+      let data = response.data;
+      if (typeof data === 'string' && data.length > 0) {
+        try { data = JSON.parse(data); } catch { /* ignore */ }
+      }
+      
+      if (data && data.pressed === true) {
+        sendDistressSignal('hardware_button');
+      }
+    } catch (err) {
+      // Quiet fail
+    }
+  }, 2000);
+};
+
+const stopEmergencyPolling = () => {
+  if (emergencyInterval) {
+    clearInterval(emergencyInterval);
+    emergencyInterval = null;
+  }
+};
+
+const sendDistressSignal = async (source = 'app_button') => {
+  if (isSendingDistress.value) return;
+  
+  isSendingDistress.value = true;
+  console.log(`Sending distress signal from ${source}...`);
+  
+  try {
+    let lat = null;
+    let lng = null;
+    
+    // Try to get freshest coordinates
+    try {
+      const position = await LocationService.getCurrentLocation();
+      lat = position.coords.latitude;
+      lng = position.coords.longitude;
+    } catch (e) {
+      if (currentLocation.value) {
+        lat = currentLocation.value.latitude;
+        lng = currentLocation.value.longitude;
+      }
+    }
+
+    await axios.post('/api/notifications', {
+      type: 'distress',
+      is_emergency: true,
+      latitude: lat,
+      longitude: lng
+    });
+
+    // Show flash message
+    distressSent.value = true;
+    setTimeout(() => {
+      distressSent.value = false;
+    }, 4000);
+    
+    // Voice prompt
+    try {
+      await TextToSpeech.speak({
+        text: 'Emergency distress signal sent to your guardian.',
+        lang: 'en-US',
+      });
+    } catch (e) {}
+
+  } catch (err) {
+    console.error('Failed to send distress signal:', err);
+    error.value = 'Failed to send distress signal: ' + (err.response?.data?.message || err.message);
+  } finally {
+    isSendingDistress.value = false;
   }
 };
 
@@ -629,6 +732,37 @@ const goToWearableSetup = () => {
           <div class="text-sm text-blue-800">
             <p class="font-semibold mb-1">Background Tracking Active</p>
             <p class="text-xs">Your location is tracked even when this app is closed or your phone is locked.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- TEMPORARY DISTRESS BUTTON -->
+      <div class="mt-4 mb-2">
+        <button 
+          @click="sendDistressSignal('app_button')"
+          :disabled="isSendingDistress"
+          class="w-full py-4 rounded-2xl shadow-lg border-2 border-red-600 bg-red-500 hover:bg-red-600 text-white font-bold text-lg flex items-center justify-center gap-3 transition-colors active:scale-95"
+        >
+          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" v-if="!isSendingDistress">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+          </svg>
+          <svg class="w-8 h-8 animate-spin" fill="none" viewBox="0 0 24 24" v-else>
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A8.001 8.001 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          {{ isSendingDistress ? 'SENDING SOS...' : 'SEND EMERGENCY DISTRESS' }}
+        </button>
+      </div>
+
+      <!-- Success Flash Message -->
+      <div v-if="distressSent" class="fixed top-20 left-4 right-4 bg-red-100 border-l-4 border-red-600 text-red-800 p-4 rounded shadow-xl z-50 animate-fadeIn">
+        <div class="flex">
+          <svg class="w-6 h-6 text-red-600 mr-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+          </svg>
+          <div>
+            <p class="font-bold">Distress Signal Sent!</p>
+            <p class="text-xs mt-1">Your guardian has been notified of your location.</p>
           </div>
         </div>
       </div>
