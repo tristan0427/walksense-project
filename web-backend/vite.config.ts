@@ -1,4 +1,4 @@
-import { wayfinder } from '@laravel/vite-plugin-wayfinder';
+// @ts-ignore
 import vue from '@vitejs/plugin-vue';
 import laravel from 'laravel-vite-plugin';
 import { defineConfig } from 'vite';
@@ -9,9 +9,6 @@ export default defineConfig({
             input: ['resources/css/app.css', 'resources/js/app.ts'],
             ssr: 'resources/js/ssr.ts',
             refresh: true,
-        }),
-        wayfinder({
-            formVariants: true,
         }),
         vue({
             template: {

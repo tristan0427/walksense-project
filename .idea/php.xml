@@ -251,7 +251,6 @@
       <path value="$PROJECT_DIR$/web-backend/vendor/myclabs/deep-copy" />
       <path value="$PROJECT_DIR$/web-backend/vendor/laravel/serializable-closure" />
       <path value="$PROJECT_DIR$/web-backend/vendor/laravel/sail" />
-      <path value="$PROJECT_DIR$/web-backend/vendor/laravel/wayfinder" />
       <path value="$PROJECT_DIR$/web-backend/vendor/laravel/tinker" />
       <path value="$PROJECT_DIR$/web-backend/vendor/symfony/finder" />
       <path value="$PROJECT_DIR$/web-backend/vendor/symfony/event-dispatcher-contracts" />

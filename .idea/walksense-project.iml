@@ -181,7 +181,6 @@
       <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/laravel/sail" />
       <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/laravel/serializable-closure" />
       <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/laravel/tinker" />
-      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/laravel/wayfinder" />
       <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/league/commonmark" />
       <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/league/config" />
       <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/league/flysystem" />
