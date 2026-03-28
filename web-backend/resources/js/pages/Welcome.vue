@@ -226,7 +226,7 @@ const scrollTo = (id: string) => {
         <p class="text-lg text-gray-700 mb-9">
           Download WalkSense and give your loved one the freedom to walk safely.
         </p>
-        <a href="/storage/WalkSense.apk" class="bg-gray-900 text-white font-semibold px-12 py-4.5 rounded-full text-lg hover:bg-gray-700 transition-colors">
+        <a href="/storage/Walksense.apk" class="bg-gray-900 text-white font-semibold px-12 py-4.5 rounded-full text-lg hover:bg-gray-700 transition-colors">
           Download for Android
         </a>
         <p class="mt-5 text-sm text-gray-500">
