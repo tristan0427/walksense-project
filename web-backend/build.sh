@@ -3,11 +3,6 @@ set -o errexit
 
 echo ">>> Running build script..."
 
-# Compile Frontend Assets (Vite/Vue)
-echo ">>> Building frontend assets..."
-npm install
-npm run build
-
 # Clear and optimize Laravel
 php artisan optimize:clear
 php artisan optimize

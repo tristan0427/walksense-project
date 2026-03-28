@@ -33,6 +33,9 @@ COPY . .
 # Install PHP dependencies
 RUN composer install --no-dev --optimize-autoloader --no-interaction
 
+# Install and build frontend assets (during Docker build, not at runtime)
+RUN npm install && npm run build
+
 # Copy Nginx config
 COPY docker/nginx.conf /etc/nginx/sites-available/default
 RUN ln -sf /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
