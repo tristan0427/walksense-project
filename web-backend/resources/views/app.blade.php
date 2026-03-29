@@ -30,7 +30,7 @@
             }
         </style>
 
-        <title inertia>{{ config('app.name', 'Laravel') }}</title>
+        <title inertia>WalkSense</title>
 
         <link rel="icon" href="/logo.png" type="image/png">
         <link rel="apple-touch-icon" href="/apple-touch-icon.png">
