@@ -259,122 +259,123 @@ const refreshLocations = () => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-gray-100 flex flex-col">
+  <div class="min-h-screen bg-[#fafaf7] flex flex-col">
 
-    <header class="bg-[#f7d686] shadow-md px-4 py-3 flex items-center justify-between">
-      <h1 class="text-lg font-bold text-gray-800">WALKSENSE</h1>
+    <!-- Header -->
+    <header class="bg-[#f7d686] border-b border-yellow-300 px-4 py-3 flex items-center justify-between drop-shadow-sm">
+      <h1 class="text-sm font-black tracking-widest uppercase text-gray-800">WALKSENSE</h1>
 
       <div class="flex items-center gap-2">
-        <!-- Refresh Button -->
-        <button
-            @click="refreshLocations"
-            :disabled="loading"
-            class="p-2 rounded-lg hover:bg-gray-100 transition"
-            title="Refresh"
-        >
-          <svg
-              :class="['w-5 h-5 text-gray-700', loading ? 'animate-spin' : '']"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-          >
+        <!-- Refresh -->
+        <button @click="refreshLocations" :disabled="loading"
+                class="p-2 rounded-lg hover:bg-yellow-400/40 transition" title="Refresh">
+          <svg :class="['w-5 h-5 text-gray-700', loading ? 'animate-spin' : '']"
+               fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
           </svg>
         </button>
 
-        <!-- Menu Button -->
-        <button @click="menuOpen = !menuOpen" class="text-gray-700 text-2xl">
-          ☰
+        <!-- Menu -->
+        <button @click="menuOpen = !menuOpen" class="p-1 rounded-lg hover:bg-yellow-400/40 transition">
+          <svg class="w-6 h-6 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+          </svg>
         </button>
       </div>
     </header>
 
     <!-- Slide Menu -->
-    <div v-if="menuOpen" class="absolute right-4 mt-2 w-40 bg-white rounded-xl shadow-lg border z-50">
-      <button @click="goAccount" class="block w-full text-left px-4 py-3 hover:bg-gray-100">
+    <div v-if="menuOpen" class="absolute right-4 mt-2 w-44 bg-white rounded-xl shadow-lg ring-1 ring-black/5 z-50 overflow-hidden transition-all duration-150">
+      <button @click="goAccount" class="block w-full text-left px-4 py-3 hover:bg-gray-50 text-sm font-medium text-gray-700">
         Account
       </button>
-      <button @click="logout" class="block w-full text-left px-4 py-3 text-red-600 hover:bg-gray-100">
+      <button @click="logout" class="block w-full text-left px-4 py-3 text-red-600 font-semibold hover:bg-red-50 text-sm">
         Logout
       </button>
     </div>
 
-    <!-- Error Message -->
-    <div v-if="error" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mx-4 mt-4 rounded">
+    <!-- Error -->
+    <div v-if="error" class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 mx-4 mt-4 rounded-r-xl">
       {{ error }}
     </div>
 
     <div class="flex-1 flex flex-col p-4 space-y-4">
 
-      <!-- Greeting Card -->
-      <div class="bg-yellow-100 rounded-2xl shadow p-4">
-        <h2 class="text-xl font-semibold text-gray-800">Hi Guardian!</h2>
+      <!-- Greeting -->
+      <div class="bg-yellow-100 rounded-2xl shadow ring-1 ring-yellow-200/60 p-4">
+        <h2 class="text-lg font-bold text-gray-800">Hi Guardian!</h2>
       </div>
 
       <!-- PWD Status Cards -->
       <div class="space-y-3">
-        <div
-            v-for="pwd in pwdLocations"
-            :key="pwd.pwd_id"
-            class="bg-white rounded-2xl shadow p-4"
-        >
+        <div v-for="pwd in pwdLocations" :key="pwd.pwd_id"
+             class="bg-white rounded-2xl shadow ring-1 ring-gray-100 p-4 transition-shadow hover:shadow-md">
           <div class="flex items-center justify-between mb-2">
-            <h2 class="font-semibold text-gray-800">{{ pwd.pwd_name }}</h2>
+            <h2 class="text-sm font-bold tracking-tight text-gray-800">{{ pwd.pwd_name }}</h2>
 
-            <!-- Online/Offline Badge -->
             <div class="flex items-center gap-2">
-              <!-- Pulse dot -->
-              <span
-                  v-if="pwd.location && isPwdOnline(pwd.location.last_updated)"
-                  class="relative flex h-3 w-3"
-              >
+              <span v-if="pwd.location && isPwdOnline(pwd.location.last_updated)" class="relative flex h-3 w-3">
                 <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                 <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
               </span>
-              <span
-                  v-else-if="pwd.location"
-                  class="h-3 w-3 rounded-full bg-gray-400"
-              ></span>
+              <span v-else-if="pwd.location" class="h-3 w-3 rounded-full bg-gray-400"></span>
 
-              <span
-                  :class="[
-                  'px-2 py-1 rounded-full text-xs font-semibold',
-                  pwd.location && isPwdOnline(pwd.location.last_updated)
-                    ? 'bg-green-100 text-green-800'
-                    : 'bg-gray-100 text-gray-800'
-                ]"
-              >
+              <span :class="[
+                'px-2 py-1 rounded-full text-xs font-semibold',
+                pwd.location && isPwdOnline(pwd.location.last_updated)
+                  ? 'bg-green-100 text-green-800'
+                  : 'bg-gray-100 text-gray-800'
+              ]">
                 {{ pwd.location && isPwdOnline(pwd.location.last_updated) ? 'Online' : 'Offline' }}
               </span>
             </div>
           </div>
 
           <div v-if="pwd.location">
-            <p class="text-sm text-gray-600">
+            <p class="text-xs text-gray-500">
               Last Updated: {{ formatLastUpdated(pwd.location.last_updated) }}
             </p>
 
-            <div v-if="pwd.location.battery_level" class="mt-2 flex items-center text-sm">
-              <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-              </svg>
-              <span
-                  :class="[
-                  'font-medium',
+            <!-- Battery bar -->
+            <div v-if="pwd.location.battery_level" class="mt-3">
+              <div class="flex items-center justify-between mb-1">
+                <div class="flex items-center gap-1.5 text-xs">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                  </svg>
+                  <span class="font-medium text-gray-700">Battery</span>
+                </div>
+                <span :class="[
+                  'text-xs font-bold',
                   pwd.location.battery_level > 50 ? 'text-green-600' :
                   pwd.location.battery_level > 20 ? 'text-yellow-600' : 'text-red-600'
-                ]"
-              >
-                Battery: {{ pwd.location.battery_level }}%
+                ]">
+                  {{ pwd.location.battery_level }}%
+                </span>
+              </div>
+              <div class="w-full h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                <div :class="[
+                  'h-full rounded-full transition-all duration-500',
+                  pwd.location.battery_level > 50 ? 'bg-green-500' :
+                  pwd.location.battery_level > 20 ? 'bg-yellow-500' : 'bg-red-500'
+                ]" :style="{ width: pwd.location.battery_level + '%' }"></div>
+              </div>
+            </div>
+
+            <!-- GPS accuracy pill -->
+            <div v-if="pwd.location.accuracy" class="mt-2">
+              <span class="text-[10px] font-medium tracking-wide uppercase text-gray-400 bg-gray-50 px-2 py-0.5 rounded-full">
+                GPS &plusmn;{{ Number(pwd.location.accuracy).toFixed(0) }}m
               </span>
             </div>
 
-            <!-- Offline Warning -->
-            <div
-                v-if="!isPwdOnline(pwd.location.last_updated)"
-                class="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs text-yellow-800"
-            >
-              Device appears offline. Last location from {{ formatLastUpdated(pwd.location.last_updated) }}.
+            <!-- Offline warning -->
+            <div v-if="!isPwdOnline(pwd.location.last_updated)"
+                 class="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2">
+              <svg class="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+              </svg>
+              <p class="text-xs font-medium text-yellow-800">Device appears offline. Last location from {{ formatLastUpdated(pwd.location.last_updated) }}.</p>
             </div>
           </div>
           <div v-else>
@@ -382,8 +383,8 @@ const refreshLocations = () => {
           </div>
         </div>
 
-        <!-- No PWDs Message -->
-        <div v-if="pwdLocations.length === 0 && !loading" class="bg-white rounded-2xl shadow p-6 text-center">
+        <!-- No PWDs -->
+        <div v-if="pwdLocations.length === 0 && !loading" class="bg-white rounded-2xl shadow ring-1 ring-gray-100 p-6 text-center">
           <svg class="w-16 h-16 mx-auto mb-3 text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
           </svg>
@@ -392,60 +393,62 @@ const refreshLocations = () => {
       </div>
 
       <!-- Live Location Map -->
-      <div class="bg-white rounded-2xl shadow p-4 flex-1">
-        <h2 class="font-semibold text-gray-800 mb-3">Live Location Map</h2>
-        <div
-            ref="mapContainer"
-            class="h-64 lg:h-96 bg-gray-200 rounded-xl overflow-hidden"
-        >
-          <!-- Leaflet map will render here -->
+      <div class="bg-white rounded-2xl shadow ring-1 ring-gray-100 p-4 flex-1 transition-shadow hover:shadow-md">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+          <h2 class="text-sm font-bold tracking-tight text-gray-800">Live Location Map</h2>
         </div>
-        <p class="text-xs text-gray-500 mt-2">
-           Map updates every 10 seconds • Click markers for details
+        <div ref="mapContainer" class="h-80 lg:h-96 bg-gray-200 rounded-xl overflow-hidden"></div>
+        <p class="text-[10px] font-medium tracking-wide uppercase text-gray-400 mt-2">
+          Updates every 10 seconds • Click markers for details
         </p>
       </div>
 
-      <!-- Alerts -->
-      <div class="bg-white rounded-2xl shadow p-4">
+      <!-- Emergency Alerts -->
+      <div class="bg-white rounded-2xl shadow ring-1 ring-gray-100 p-4 transition-shadow hover:shadow-md">
         <div class="flex items-center justify-between mb-3">
-          <h2 class="font-semibold text-gray-800 flex items-center">
-            <svg class="w-5 h-5 text-red-500 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+          <h2 class="text-sm font-bold tracking-tight text-gray-800 flex items-center gap-2">
+            <svg class="w-5 h-5 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
             </svg>
             Emergency Alerts
           </h2>
           <span v-if="notifications.length" class="bg-red-100 text-red-700 font-bold text-xs px-2 py-1 rounded-full">{{ notifications.length }}</span>
         </div>
 
+        <!-- Empty state -->
         <div v-if="notifications.length === 0" class="text-center py-6">
-          <svg class="w-12 h-12 mx-auto text-gray-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+          <svg class="w-12 h-12 mx-auto text-green-300 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
-          <p class="text-sm text-gray-500">No active alerts</p>
+          <p class="text-sm text-green-600 font-semibold">No active alerts</p>
         </div>
 
+        <!-- Alert cards -->
         <div v-else class="space-y-3 max-h-80 overflow-y-auto pr-1">
-          <div v-for="notif in notifications" :key="notif.id" 
+          <div v-for="notif in notifications" :key="notif.id"
                class="border border-red-200 bg-red-50 rounded-xl p-3 shadow-sm transition-all hover:shadow-md animate-fadeIn">
             <div class="flex justify-between items-start">
               <div>
-                <h3 class="font-bold text-red-700 flex items-center">
-                  <span class="w-2 h-2 rounded-full bg-red-600 animate-pulse mr-2"></span>
+                <h3 class="text-sm font-bold text-red-700 flex items-center gap-2">
+                  <svg class="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+                  </svg>
                   Distress Signal
                 </h3>
                 <p class="text-xs text-gray-600 font-medium tracking-wide mt-1">{{ notif.pwd?.user?.name || 'Your PWD' }}</p>
-                <p class="text-[10px] text-gray-500 mt-1 uppercase">{{ new Date(notif.triggered_at).toLocaleString() }}</p>
+                <p class="text-[10px] text-gray-400 mt-1 uppercase tracking-wide">{{ new Date(notif.triggered_at).toLocaleString() }}</p>
               </div>
             </div>
-            
+
             <div class="mt-3 flex gap-2">
               <button @click="map && map.setView([notif.latitude, notif.longitude], 18)"
                       v-if="notif.latitude && notif.longitude"
-                      class="flex-1 py-1.5 px-3 text-xs font-semibold rounded-lg border border-red-500 text-red-600 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-400 transition-colors">
-                Locate
+                      class="flex-1 py-1.5 px-3 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors">
+                Locate on Map
               </button>
               <button @click="deleteNotification(notif.id)"
-                      class="py-1.5 px-3 text-xs font-semibold rounded-lg text-gray-500 hover:text-red-700 hover:bg-red-100 transition-colors">
+                      class="py-1.5 px-3 text-xs font-medium rounded-lg text-gray-500 hover:text-red-700 hover:bg-red-100 transition-colors">
                 Dismiss
               </button>
             </div>
@@ -453,39 +456,16 @@ const refreshLocations = () => {
         </div>
       </div>
     </div>
-    <div
-        v-if="showLogoutConfirm"
-        class="fixed inset-0 bg-black/40 backdrop-blur-sm z-9998"
-    ></div>
 
-
-    <div
-        v-if="showLogoutConfirm"
-        class="fixed inset-0 flex items-center justify-center z-9999"
-    >
-      <div class="bg-white rounded-2xl shadow-xl p-6 w-80 animate-fadeIn">
-        <h3 class="text-lg font-semibold text-gray-800 mb-3">
-          Confirm Logout
-        </h3>
-
-        <p class="text-sm text-gray-600 mb-6">
-          Are you sure you want to log out?
-        </p>
-
+    <!-- Logout overlay -->
+    <div v-if="showLogoutConfirm" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-[9998]"></div>
+    <div v-if="showLogoutConfirm" class="fixed inset-0 flex items-center justify-center z-[9999]">
+      <div class="bg-white rounded-2xl shadow-xl ring-1 ring-black/5 p-6 w-80 animate-fadeIn">
+        <h3 class="text-lg font-bold text-gray-800 mb-3">Confirm Logout</h3>
+        <p class="text-sm text-gray-600 mb-6">Are you sure you want to log out?</p>
         <div class="flex justify-end gap-3">
-          <button
-              @click="cancelLogout"
-              class="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700"
-          >
-            Cancel
-          </button>
-
-          <button
-              @click="confirmLogout"
-              class="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white"
-          >
-            Logout
-          </button>
+          <button @click="cancelLogout" class="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium text-sm">Cancel</button>
+          <button @click="confirmLogout" class="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold text-sm">Logout</button>
         </div>
       </div>
     </div>
@@ -496,18 +476,9 @@ const refreshLocations = () => {
 @import 'leaflet/dist/leaflet.css';
 
 @keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: scale(0.9);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
+  from { opacity: 0; transform: scale(0.95); }
+  to   { opacity: 1; transform: scale(1); }
 }
-
-.animate-fadeIn {
-  animation: fadeIn 0.2s ease-out;
-}
+.animate-fadeIn { animation: fadeIn 0.2s ease-out; }
 </style>
 

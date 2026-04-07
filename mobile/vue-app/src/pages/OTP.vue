@@ -196,25 +196,18 @@ const goBack = () => {
 
 <template>
   <div class="min-h-screen flex flex-col bg-[#f7d686]">
-    <!-- Back Button -->
+    <!-- Back -->
     <div class="px-4 pt-4 pb-2">
-      <button
-          @click="goBack"
-          class="flex items-center gap-2 text-gray-700 hover:text-black transition-colors group"
-      >
-        <svg
-            class="w-6 h-6 transform group-hover:-translate-x-1 transition-transform"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-        >
+      <button @click="goBack"
+              class="flex items-center gap-2 text-gray-700 hover:text-black transition-colors group">
+        <svg class="w-6 h-6 transform group-hover:-translate-x-1 transition-transform"
+             fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
         </svg>
-        <span class="font-medium">Back</span>
+        <span class="text-sm font-medium">Back</span>
       </button>
     </div>
 
-    <!-- Main Content -->
     <div class="flex-1 flex flex-col justify-center px-6 pb-8">
       <!-- Header -->
       <div class="w-full text-center mb-8">
@@ -227,49 +220,46 @@ const goBack = () => {
           </div>
         </div>
 
-        <h1 class="text-2xl sm:text-3xl font-bold text-black mb-3">
+        <h1 class="text-2xl sm:text-3xl font-bold tracking-tight text-black mb-3">
           Verify Your Email
         </h1>
-        <p class="text-sm text-gray-700 mb-1">
-          We've sent a verification code to
-        </p>
-        <p class="text-sm font-semibold text-black break-all">
-          {{ email }}
-        </p>
+        <p class="text-sm text-gray-700 mb-1">We've sent a verification code to</p>
+        <p class="text-sm font-semibold text-black break-all">{{ email }}</p>
       </div>
 
+      <!-- Timer -->
       <div class="w-full mb-6">
-        <div class="bg-white rounded-xl p-4 shadow-md border-2 border-gray-200">
+        <div class="bg-white rounded-xl p-4 shadow-md ring-1 ring-gray-200">
           <div class="flex items-center justify-center gap-2">
             <svg class="w-5 h-5 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
             <span class="text-sm text-gray-600">Code expires in:</span>
-            <span :class="['text-xl font-bold font-mono', timeColor]">
-              {{ formattedTime }}
-            </span>
+            <span :class="['text-xl font-bold font-mono', timeColor]">{{ formattedTime }}</span>
           </div>
-
-          <!-- Expired warning -->
           <div v-if="isExpired" class="mt-2 text-center">
-            <p class="text-xs text-red-600 font-semibold">
-              Code has expired! Please request a new one.
-            </p>
+            <p class="text-xs text-red-600 font-semibold">Code has expired! Please request a new one.</p>
           </div>
         </div>
       </div>
 
-      <!-- Success Message -->
-      <div v-if="successMessage" class="w-full mb-4 p-4 bg-green-100 border border-green-400 text-green-700 rounded-lg text-sm text-center font-medium">
-        {{ successMessage }}
+      <!-- Success -->
+      <div v-if="successMessage" class="w-full mb-4 p-3 bg-green-100 border-l-4 border-green-500 text-green-700 rounded-r-xl text-sm flex items-start gap-2">
+        <svg class="w-4 h-4 text-green-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <span class="font-medium">{{ successMessage }}</span>
       </div>
 
-      <!-- Error Message -->
-      <div v-if="errorMessage" class="w-full mb-4 p-4 bg-red-100 border border-red-400 text-red-700 rounded-lg text-sm text-center font-medium">
-        {{ errorMessage }}
+      <!-- Error -->
+      <div v-if="errorMessage" class="w-full mb-4 p-3 bg-red-100 border-l-4 border-red-500 text-red-700 rounded-r-xl text-sm flex items-start gap-2">
+        <svg class="w-4 h-4 text-red-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+        </svg>
+        <span class="font-medium">{{ errorMessage }}</span>
       </div>
 
-      <!-- OTP Input -->
+      <!-- OTP Inputs -->
       <div class="w-full mb-8">
         <div class="flex justify-center gap-2 sm:gap-3">
           <input
@@ -282,30 +272,22 @@ const goBack = () => {
               type="text"
               inputmode="numeric"
               maxlength="1"
-              class="w-12 h-12 sm:w-14 sm:h-14 text-center text-2xl font-bold bg-white border-2 border-gray-300 rounded-lg focus:border-black focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-1 transition-colors"
+              class="w-12 h-14 sm:w-14 sm:h-16 text-center text-2xl font-bold bg-white border-2 border-gray-300 rounded-xl shadow-sm focus:border-black focus:outline-none focus:ring-2 focus:ring-black focus:ring-offset-1 transition-colors"
           />
         </div>
       </div>
 
-      <!-- Verify Button -->
-      <button
-          @click="handleVerify"
-          :disabled="loading || otp.join('').length !== 6"
-          class="w-full py-4 rounded-full bg-black text-white text-base sm:text-lg font-semibold hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-all mb-8"
-      >
+      <!-- Verify -->
+      <button @click="handleVerify" :disabled="loading || otp.join('').length !== 6"
+              class="w-full py-4 rounded-full bg-black text-white text-base sm:text-lg font-semibold shadow-md hover:bg-gray-800 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed transition-all mb-8">
         {{ loading ? 'Verifying...' : 'Verify Code' }}
       </button>
 
-      <!-- Resend Section -->
+      <!-- Resend -->
       <div class="w-full text-center">
-        <p class="text-sm text-gray-700 mb-3">
-          Didn't receive the code?
-        </p>
-        <button
-            @click="handleResend"
-            :disabled="resending"
-            class="text-sm sm:text-base font-semibold text-black underline hover:no-underline disabled:opacity-50 disabled:cursor-not-allowed transition-opacity"
-        >
+        <p class="text-xs text-gray-600 mb-3">Didn't receive the code?</p>
+        <button @click="handleResend" :disabled="resending"
+                class="px-5 py-1.5 rounded-full border border-gray-800 text-sm font-semibold text-black hover:bg-black hover:text-white disabled:opacity-50 disabled:cursor-not-allowed transition-all">
           {{ resending ? 'Sending...' : 'Resend Code' }}
         </button>
       </div>

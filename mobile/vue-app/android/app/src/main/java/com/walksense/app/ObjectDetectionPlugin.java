@@ -85,7 +85,7 @@ public class ObjectDetectionPlugin extends Plugin {
     public void loadModel(PluginCall call) {
         try {
             Log.d(TAG, "Loading TFLite model...");
-            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "best_float16.tflite");
+            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "walksense_float16.tflite");
             Interpreter.Options options = new Interpreter.Options();
             options.setNumThreads(4);
             tflite = new Interpreter(model, options);
@@ -329,7 +329,7 @@ public class ObjectDetectionPlugin extends Plugin {
             resized = Bitmap.createScaledBitmap(frameToProcess, INPUT_SIZE, INPUT_SIZE, true);
             ByteBuffer inputBuffer = convertBitmapToByteBuffer(resized);
 
-            float[][][] outputTransposed = new float[1][21][2100];
+            float[][][] outputTransposed = new float[1][24][2100];
             tflite.run(inputBuffer, outputTransposed);
 
             Double confidenceParam = call.getDouble("confidence", 0.3);
@@ -564,7 +564,7 @@ public class ObjectDetectionPlugin extends Plugin {
 
             int classId = 0;
             float maxClassScore = output[4][i];
-            for (int j = 5; j < 21; j++) {
+            for (int j = 5; j < 24; j++) {
                 if (output[j][i] > maxClassScore) {
                     maxClassScore = output[j][i];
                     classId = j - 4;
@@ -588,36 +588,105 @@ public class ObjectDetectionPlugin extends Plugin {
         return detections;
     }
 
+    /**
+     * Returns a scale multiplier for each class based on its real-world physical size.
+     * Naturally large objects (bus, truck) are penalized so their huge screen presence
+     * does not trick the system into thinking they are dangerously close.
+     * Naturally tiny objects (pothole, bollards) are boosted so a small bounding box
+     * still registers as a high-severity threat when it is actually at the user's feet.
+     */
+    private float getScaleMultiplier(String className) {
+        switch (className) {
+            // ── Tiny objects: boost heavily ──────────────────────────────────
+            case "pothole":          return 4.0f;  // ground-level, easy to miss
+            case "bollards":         return 3.5f;  // narrow, small footprint
+            case "pole":             return 3.0f;  // thin vertical obstacle
+            // ── Medium objects: slight boost ────────────────────────────────
+            case "stairs":           return 2.0f;  // spread across ground
+            case "door":             return 1.5f;
+            case "cat":              return 2.5f;
+            case "dog":              return 2.0f;
+            // ── Normal-sized objects: no adjustment ─────────────────────────
+            case "person":           return 1.0f;
+            case "group of people": return 1.0f;
+            case "chair":            return 1.2f;
+            case "couch":            return 1.0f;
+            case "table":            return 1.0f;
+            case "tree":             return 0.8f;
+            case "motorcycle":       return 0.9f;
+            case "car":              return 0.7f;
+            case "vehicle":          return 0.7f;
+            // ── Very large objects: penalize so far-away does not trigger ────
+            case "wall":             return 0.5f;
+            case "glass wall":       return 0.5f;
+            case "bus":              return 0.5f;
+            case "truck":            return 0.5f;
+            default:                 return 1.0f;
+        }
+    }
+
+    /**
+     * Selects the single most urgent threat from all detected objects using
+     * a Dual-Layer Threat Score:
+     *   Layer 1 — Class-Specific Scale Weighting: Adjusts raw bounding box area
+     *             based on the object's real-world physical size (via getScaleMultiplier).
+     *   Layer 2 — Directional Preference: Objects in the "ahead" sector receive
+     *             a 2x multiplier because the direct path is always the priority
+     *             collision zone for a blind user walking forward.
+     */
     private Detection findNearestObject(List<Detection> detections) {
         if (detections.isEmpty()) return null;
         Detection nearest = null;
-        float maxArea = 0;
+        float maxThreatScore = 0;
         for (Detection det : detections) {
-            float area = (det.x2 - det.x1) * (det.y2 - det.y1);
-            if (area > maxArea) { maxArea = area; nearest = det; }
+            // Raw bounding box area (pixels²)
+            float rawArea = (det.x2 - det.x1) * (det.y2 - det.y1);
+
+            // Layer 1: compensate for the object's real-world physical size
+            float scaledArea = rawArea * getScaleMultiplier(det.className);
+
+            // Layer 2: double the threat score if the object is in the direct path
+            float centerX = (det.x1 + det.x2) / 2f;
+            String dir = getDirection(centerX, INPUT_SIZE);
+            float directionalMultiplier = dir.equals("ahead") ? 2.0f : 1.0f;
+
+            float threatScore = scaledArea * directionalMultiplier;
+
+            Log.d(TAG, String.format(
+                "[Threat] %s | rawArea=%.0f | scaled=%.0f | dir=%s | score=%.0f",
+                det.className, rawArea, scaledArea, dir, threatScore
+            ));
+
+            if (threatScore > maxThreatScore) {
+                maxThreatScore = threatScore;
+                nearest = det;
+            }
         }
         return nearest;
     }
 
     private String getClassName(int classId) {
         String[] classes = {
-                "person",           // 0
-                "group of people",  // 1
-                "vehicle",          // 2
-                "bollards",         // 3
-                "stairs",           // 4
-                "tree",             // 5
-                "crosswalk",        // 6
-                "door",             // 7
-                "chair",            // 8
-                "couch",            // 9
-                "table",            // 10
-                "pothole",          // 11
-                "pole",             // 12
-                "cat",              // 13
-                "dog",              // 14
-                "wall",             // 15
-                "glass wall"        // 16
+                "person",            // 0
+                "group of people",   // 1
+                "vehicle",           // 2
+                "car",               // 3
+                "bus",               // 4
+                "motorcycle",        // 5
+                "truck",             // 6
+                "bollards",          // 7
+                "stairs",            // 8
+                "tree",              // 9
+                "door",              // 10
+                "chair",             // 11
+                "couch",             // 12
+                "table",             // 13
+                "pothole",           // 14
+                "pole",              // 15
+                "cat",               // 16
+                "dog",               // 17
+                "wall",              // 18
+                "glass wall"         // 19
         };
         if (classId >= 0 && classId < classes.length) return classes[classId];
         return "obstacle";
