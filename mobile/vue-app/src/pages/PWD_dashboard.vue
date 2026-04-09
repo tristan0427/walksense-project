@@ -62,6 +62,11 @@ const lastSpokenTime    = ref(0);
 const isSpeaking        = ref(false);
 const SPEAK_DELAY       = 3000;
 
+// Temporal consistency — same class must appear N consecutive frames before TTS
+const lastDetectedClass    = ref('');
+const consecutiveCount     = ref(0);
+const CONSECUTIVE_THRESHOLD = 3;
+
 // ── IP Setup form ────────────────────────────────────────────────────────────
 const ipFormDay   = ref(dayCamIp.value);
 const ipFormNight = ref(nightCamIp.value);
@@ -404,21 +409,28 @@ const startDetection = () => {
 
       if (result.nearest) {
         nearestObject.value = result.nearest;
+        const { class: objClass, distance, direction } = result.nearest;
 
-        if (canSpeak) {
-          const { class: objClass, distance, direction } = result.nearest;
+        // ── Temporal Consistency Filter ──────────────────────────────────
+        // Same class must appear N consecutive frames to suppress flicker
+        if (objClass === lastDetectedClass.value) {
+          consecutiveCount.value++;
+        } else {
+          lastDetectedClass.value = objClass;
+          consecutiveCount.value = 1;
+        }
 
-          // ── A. Direction & Distance Gating ───────────────────────────────
-          // Objects ahead are announced at medium distance or closer.
-          // Side objects are only announced if they are very close (user drifting).
+        const isStable = consecutiveCount.value >= CONSECUTIVE_THRESHOLD;
+
+        if (canSpeak && isStable) {
+          // ── Direction & Distance Gating ──────────────────────────────────
+          // Ahead: medium distance or closer. Sides: very close only.
           const shouldSpeak =
             (direction === 'ahead' && distance !== 'far') ||
             (direction !== 'ahead' && distance === 'very close');
 
           if (shouldSpeak) {
-            // Natural-sounding TTS message:
-            //   Ahead   → "Car close ahead"
-            //   Sides   → "Wall very close on your left"
+            // Natural TTS: "Car close ahead" / "Wall very close on your left"
             const locationPhrase = direction === 'ahead'
               ? 'ahead'
               : `on your ${direction}`;
@@ -443,6 +455,8 @@ const startDetection = () => {
         }
       } else {
         nearestObject.value = null;
+        lastDetectedClass.value = '';
+        consecutiveCount.value = 0;
       }
 
     } catch (err) {
