@@ -34,9 +34,22 @@ const nightCamIp = ref(localStorage.getItem('nightCamIp') || '');
 
 // Active camera — driven by BH1750 lux reading from ESP32
 // The ESP32 reports a lux value; Vue decides which cam to use
-const activeCamera  = ref('day');   // 'day' | 'night'
-const currentLux    = ref(null);    // latest lux from BH1750
-const LUX_THRESHOLD = 50;           // below this → night mode
+const activeCamera  = ref('day');       // 'day' | 'night'
+const currentLux    = ref(null);        // latest raw lux from BH1750
+const averageLux    = ref(null);        // rolling average for display
+
+// ── Lux Hysteresis Config ─────────────────────────────────────────
+// Enter night mode: rolling average drops below NIGHT_ENTER for SUSTAINED_MS
+// Exit  night mode: rolling average rises above NIGHT_EXIT  for SUSTAINED_MS
+const NIGHT_ENTER    = 5;               // lux threshold to enter night mode
+const NIGHT_EXIT     = 15;              // lux threshold to exit night mode
+const LUX_BUFFER_SIZE = 10;             // number of readings to average (~5 sec at 500ms)
+const SUSTAINED_MS   = 3000;            // must sustain for 3 seconds before switching
+
+// Rolling average state
+const luxBuffer      = [];              // circular buffer for lux readings
+let sustainedSince   = null;            // timestamp when threshold was first met
+let sustainedTarget  = null;            // 'night' or 'day' — which mode we're trending toward
 const showIpSetup = ref(false);  // ← never auto-show
 
 const isSendingDistress = ref(false);
@@ -208,7 +221,7 @@ const startLuxPolling = () => {
       dayCamConnected.value = false;
       dayCamStatus.value = 'Offline';
     }
-  }, 5000);
+  }, 500);   // poll every 500ms for smooth rolling average
 };
 
 const stopLuxPolling = () => {
@@ -218,22 +231,58 @@ const stopLuxPolling = () => {
   }
 };
 
-// Call this whenever you receive a lux reading from the ESP32
-// (e.g. via a secondary HTTP endpoint or WebSocket from the board)
+// Called every 500ms with a fresh lux reading from the ESP32.
+// Uses rolling average + hysteresis + sustained duration to prevent
+// false night-mode triggers from body shadows covering the BH1750.
 const onLuxReceived = async (lux) => {
   currentLux.value = lux;
-  const newCam = lux < LUX_THRESHOLD ? 'night' : 'day';
 
-  if (newCam !== activeCamera.value) {
-    activeCamera.value = newCam;
-    console.log(`💡 Lux ${lux} → switching to ${newCam} camera`);
-    try {
-      await ObjectDetection.switchActiveCamera({ camera: newCam });
-      // If detection was off because day stream was originally dead but night is up
-      maybeStartDetection();
-    } catch (err) {
-      console.error('Camera switch failed:', err);
+  // ── 1. Update rolling average buffer ────────────────────────────
+  luxBuffer.push(lux);
+  if (luxBuffer.length > LUX_BUFFER_SIZE) luxBuffer.shift();
+
+  // Need at least 3 readings before making decisions
+  if (luxBuffer.length < 3) return;
+
+  const avg = luxBuffer.reduce((sum, v) => sum + v, 0) / luxBuffer.length;
+  averageLux.value = Math.round(avg * 10) / 10;
+
+  // ── 2. Determine target mode based on hysteresis ────────────────
+  let targetMode = null;
+
+  if (activeCamera.value === 'day' && avg < NIGHT_ENTER) {
+    targetMode = 'night';  // avg below 5 → wants to enter night
+  } else if (activeCamera.value === 'night' && avg > NIGHT_EXIT) {
+    targetMode = 'day';    // avg above 15 → wants to exit night
+  }
+
+  // ── 3. Sustained duration check ─────────────────────────────────
+  if (targetMode) {
+    if (sustainedTarget !== targetMode) {
+      // New trend direction — start the timer
+      sustainedTarget = targetMode;
+      sustainedSince  = Date.now();
     }
+
+    const elapsed = Date.now() - sustainedSince;
+    if (elapsed >= SUSTAINED_MS) {
+      // Sustained long enough — switch!
+      activeCamera.value = targetMode;
+      console.log(`💡 Avg lux ${avg.toFixed(1)} sustained ${(elapsed/1000).toFixed(1)}s → switching to ${targetMode} camera`);
+      sustainedTarget = null;
+      sustainedSince  = null;
+
+      try {
+        await ObjectDetection.switchActiveCamera({ camera: targetMode });
+        maybeStartDetection();
+      } catch (err) {
+        console.error('Camera switch failed:', err);
+      }
+    }
+  } else {
+    // Not meeting any threshold — reset sustained timer
+    sustainedTarget = null;
+    sustainedSince  = null;
   }
 };
 
@@ -619,7 +668,8 @@ const goToWearableSetup = () => {
             <path d="M10 2a1 1 0 011 1v1a1 1 0 11-2 0V3a1 1 0 011-1zm4 8a4 4 0 11-8 0 4 4 0 018 0zm-.464 4.95l.707.707a1 1 0 001.414-1.414l-.707-.707a1 1 0 00-1.414 1.414zm2.12-10.607a1 1 0 010 1.414l-.706.707a1 1 0 11-1.414-1.414l.707-.707a1 1 0 011.414 0zM17 11a1 1 0 100-2h-1a1 1 0 100 2h1zm-7 4a1 1 0 011 1v1a1 1 0 11-2 0v-1a1 1 0 011-1zM5.05 6.464A1 1 0 106.465 5.05l-.708-.707a1 1 0 00-1.414 1.414l.707.707zm1.414 8.486l-.707.707a1 1 0 01-1.414-1.414l.707-.707a1 1 0 011.414 1.414zM4 11a1 1 0 100-2H3a1 1 0 000 2h1z"/>
           </svg>
           {{ currentLux }} lux
-          <span class="text-gray-400">(threshold: {{ LUX_THRESHOLD }})</span>
+          <span v-if="averageLux !== null" class="text-gray-400">(avg: {{ averageLux }})</span>
+          <span class="text-gray-400">(enter: &lt;{{ NIGHT_ENTER }} / exit: &gt;{{ NIGHT_EXIT }})</span>
         </div>
 
         <!-- Day camera -->

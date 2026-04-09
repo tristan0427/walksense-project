@@ -332,8 +332,8 @@ public class ObjectDetectionPlugin extends Plugin {
             float[][][] outputTransposed = new float[1][24][2100];
             tflite.run(inputBuffer, outputTransposed);
 
-            Double confidenceParam = call.getDouble("confidence", 0.3);
-            float confidenceThreshold = confidenceParam != null ? confidenceParam.floatValue() : 0.3f;
+            Double confidenceParam = call.getDouble("confidence", 0.45);
+            float confidenceThreshold = confidenceParam != null ? confidenceParam.floatValue() : 0.45f;
 
             List<Detection> detections = postProcessTransposed(outputTransposed[0], confidenceThreshold);
             Log.d(TAG, "Detections [" + activeCamera + "]: " + detections.size());
