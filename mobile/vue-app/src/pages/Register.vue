@@ -135,6 +135,7 @@ const validateForm = () => {
   return true
 }
 const handleRegister = async () => {
+  if (loading.value) return
   errorMessage.value = ''
   if (!validateForm()) {
     return
@@ -352,7 +353,7 @@ const handleRegister = async () => {
 
         <!-- Register Button -->
         <button type="submit" :disabled="loading"
-                class="w-full py-4 rounded-full bg-black text-white text-lg font-semibold shadow-md hover:bg-gray-800 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed transition-all mt-8">
+                class="w-full py-4 rounded-full bg-black text-white text-lg font-semibold shadow-md hover:bg-gray-800 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none transition-all mt-8">
           {{ loading ? 'Registering...' : 'Register' }}
         </button>
       </form>

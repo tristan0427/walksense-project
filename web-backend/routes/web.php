@@ -1,27 +1,9 @@
 <?php
 
 use App\Http\Controllers\ProfileController;
-use App\Http\Controllers\Auth\AuthenticatedSessionController;
-use App\Http\Controllers\Auth\RegisteredUserController;
 use Illuminate\Support\Facades\Route;
-use Illuminate\Http\Request;
-
-Route::post('/api/login', [AuthenticatedSessionController::class, 'store']);
-Route::post('/api/register', [RegisteredUserController::class, 'store']);
 
 
-// PROTECTED ROUTES (token required)
-Route::middleware('auth:sanctum')->group(function () {
-
-    Route::post('/api/logout', [AuthenticatedSessionController::class, 'destroy']);
-
-    Route::get('/api/user', function (Request $request) {
-        return response()->json([
-            'user' => $request->user()
-        ]);
-    });
-
-});
 
 
 Route::get('/', function () {

@@ -275,10 +275,18 @@ const resetAndReprovision = async () => {
       </div>
 
       <!-- Success card -->
-      <div v-if="isDone" class="bg-green-50 border border-green-200 rounded-2xl p-4 space-y-3">
-        <div class="flex items-center justify-center gap-2 text-green-800 font-bold mb-2">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>
-          <p>Cameras Connected!</p>
+      <div v-if="isDone" :class="[
+        'rounded-2xl p-4 space-y-3 border',
+        dayBoard || nightBoard ? 'bg-green-50 border-green-200' : 'bg-amber-50 border-amber-200'
+      ]">
+        <div v-if="dayBoard || nightBoard" class="flex items-center justify-center gap-2 font-bold mb-2"
+             :class="dayBoard && nightBoard ? 'text-green-800' : 'text-amber-800'">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" :class="dayBoard && nightBoard ? 'text-green-600' : 'text-amber-600'" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>
+          <p>{{ dayBoard && nightBoard ? 'Cameras Connected!' : 'Partial Connection' }}</p>
+        </div>
+        <div v-else class="flex items-center justify-center gap-2 text-amber-800 font-bold mb-2">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+          <p>No Cameras Found</p>
         </div>
 
         <div v-if="dayBoard" class="flex items-center justify-between bg-white rounded-xl p-3 shadow-sm border border-gray-100">
@@ -319,7 +327,8 @@ const resetAndReprovision = async () => {
           <p class="text-sm text-red-600 font-medium">Night camera not found</p>
         </div>
 
-        <p class="text-xs text-green-700 text-center font-medium mt-2">You can now go back to the dashboard.</p>
+        <p v-if="dayBoard || nightBoard" class="text-xs text-green-700 text-center font-medium mt-2">You can now go back to the dashboard.</p>
+        <p v-else class="text-xs text-amber-700 text-center font-medium mt-2">Make sure cameras are powered on and try again.</p>
       </div>
 
       <!-- ── Method 3: Reset & Re-provision ── -->

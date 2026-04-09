@@ -97,7 +97,7 @@ onMounted(async () => {
   });
   ObjectDetection.addListener('dayCamError', (data) => {
     dayCamConnected.value = false;
-    dayCamStatus.value    = 'Error: ' + data.error;
+    dayCamStatus.value    = 'Offline';
     console.error('Day cam error:', data.error);
   });
 
@@ -110,7 +110,7 @@ onMounted(async () => {
   });
   ObjectDetection.addListener('nightCamError', (data) => {
     nightCamConnected.value = false;
-    nightCamStatus.value    = 'Error: ' + data.error;
+    nightCamStatus.value    = 'Offline';
     console.error('Night cam error:', data.error);
   });
 
@@ -205,7 +205,8 @@ const startLuxPolling = () => {
         onLuxReceived(data.lux);
       }
     } catch (err) {
-      // Quiet fail — board might be off or busy
+      dayCamConnected.value = false;
+      dayCamStatus.value = 'Offline';
     }
   }, 5000);
 };
@@ -261,7 +262,8 @@ const startEmergencyPolling = () => {
         sendDistressSignal('hardware_button');
       }
     } catch (err) {
-      // Quiet fail
+      nightCamConnected.value = false;
+      nightCamStatus.value = 'Offline';
     }
   }, 2000);
 };
