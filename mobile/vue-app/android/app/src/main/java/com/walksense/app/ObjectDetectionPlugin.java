@@ -1,7 +1,10 @@
 package com.walksense.app;
 
 import android.graphics.Bitmap;
+import android.util.Base64;
 import android.util.Log;
+
+import java.io.ByteArrayOutputStream;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -329,11 +332,12 @@ public class ObjectDetectionPlugin extends Plugin {
             resized = Bitmap.createScaledBitmap(frameToProcess, INPUT_SIZE, INPUT_SIZE, true);
             ByteBuffer inputBuffer = convertBitmapToByteBuffer(resized);
 
-            float[][][] outputTransposed = new float[1][24][2100];
+            float[][][] outputTransposed = new float[1][25][2100];
             tflite.run(inputBuffer, outputTransposed);
 
             Double confidenceParam = call.getDouble("confidence", 0.45);
             float confidenceThreshold = confidenceParam != null ? confidenceParam.floatValue() : 0.45f;
+            boolean includeFrame = Boolean.TRUE.equals(call.getBoolean("includeFrame", false));
 
             List<Detection> detections = postProcessTransposed(outputTransposed[0], confidenceThreshold);
             Log.d(TAG, "Detections [" + activeCamera + "]: " + detections.size());
@@ -356,6 +360,18 @@ public class ObjectDetectionPlugin extends Plugin {
                 nearestObj.put("camera",     activeCamera);  // tell Vue which cam detected it
 
                 ret.put("nearest", nearestObj);
+            }
+
+            // Encode frame as base64 JPEG if requested by Vue
+            if (includeFrame && frameToProcess != null && !frameToProcess.isRecycled()) {
+                try {
+                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                    frameToProcess.compress(Bitmap.CompressFormat.JPEG, 50, baos);
+                    String base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+                    ret.put("frame", "data:image/jpeg;base64," + base64);
+                } catch (Exception encodeErr) {
+                    Log.w(TAG, "Frame encode skipped: " + encodeErr.getMessage());
+                }
             }
 
             ret.put("success", true);
@@ -564,7 +580,7 @@ public class ObjectDetectionPlugin extends Plugin {
 
             int classId = 0;
             float maxClassScore = output[4][i];
-            for (int j = 5; j < 24; j++) {
+            for (int j = 5; j < 25; j++) {
                 if (output[j][i] > maxClassScore) {
                     maxClassScore = output[j][i];
                     classId = j - 4;
@@ -604,7 +620,6 @@ public class ObjectDetectionPlugin extends Plugin {
             // ── Medium objects: slight boost ────────────────────────────────
             case "stairs":           return 2.0f;  // spread across ground
             case "door":             return 1.5f;
-            case "cat":              return 2.5f;
             case "dog":              return 2.0f;
             // ── Normal-sized objects: no adjustment ─────────────────────────
             case "person":           return 1.0f;
@@ -615,12 +630,14 @@ public class ObjectDetectionPlugin extends Plugin {
             case "tree":             return 0.8f;
             case "motorcycle":       return 0.9f;
             case "car":              return 0.7f;
-            case "vehicle":          return 0.7f;
+            case "pedicab":          return 0.9f;  // similar to motorcycle
             // ── Very large objects: penalize so far-away does not trigger ────
             case "wall":             return 0.5f;
             case "glass wall":       return 0.5f;
             case "bus":              return 0.5f;
             case "truck":            return 0.5f;
+            case "cabinet":          return 1.0f;  // indoor furniture, normal size
+            case "window":           return 0.8f;  // suppressed from TTS (see findNearestObject)
             default:                 return 1.0f;
         }
     }
@@ -639,6 +656,10 @@ public class ObjectDetectionPlugin extends Plugin {
         Detection nearest = null;
         float maxThreatScore = 0;
         for (Detection det : detections) {
+            // Window is a training-only disambiguation class — not a navigation obstacle.
+            // The model detects it to avoid door/cabinet false positives, but we never announce it.
+            if (det.className.equals("window")) continue;
+
             // Raw bounding box area (pixels²)
             float rawArea = (det.x2 - det.x1) * (det.y2 - det.y1);
 
@@ -669,24 +690,25 @@ public class ObjectDetectionPlugin extends Plugin {
         String[] classes = {
                 "person",            // 0
                 "group of people",   // 1
-                "vehicle",           // 2
-                "car",               // 3
-                "bus",               // 4
-                "motorcycle",        // 5
-                "truck",             // 6
-                "bollards",          // 7
-                "stairs",            // 8
-                "tree",              // 9
-                "door",              // 10
-                "chair",             // 11
-                "couch",             // 12
-                "table",             // 13
-                "pothole",           // 14
-                "pole",              // 15
-                "cat",               // 16
-                "dog",               // 17
-                "wall",              // 18
-                "glass wall"         // 19
+                "car",               // 2
+                "bus",               // 3
+                "motorcycle",        // 4
+                "truck",             // 5
+                "bollards",          // 6
+                "stairs",            // 7
+                "tree",              // 8
+                "door",              // 9
+                "chair",             // 10
+                "couch",             // 11
+                "table",             // 12
+                "pothole",           // 13
+                "pole",              // 14
+                "dog",               // 15
+                "wall",              // 16
+                "glass wall",        // 17
+                "cabinet",           // 18
+                "window",            // 19
+                "pedicab"            // 20
         };
         if (classId >= 0 && classId < classes.length) return classes[classId];
         return "obstacle";

@@ -61,11 +61,7 @@ const detectionInterval = ref(null);
 const lastSpokenTime    = ref(0);
 const isSpeaking        = ref(false);
 const SPEAK_DELAY       = 3000;
-
-// Temporal consistency — same class must appear N consecutive frames before TTS
-const lastDetectedClass    = ref('');
-const consecutiveCount     = ref(0);
-const CONSECUTIVE_THRESHOLD = 3;
+const cameraFrame       = ref(null);  // base64 data URI from detection
 
 // ── IP Setup form ────────────────────────────────────────────────────────────
 const ipFormDay   = ref(dayCamIp.value);
@@ -402,28 +398,21 @@ const startDetection = () => {
   detectionInterval.value = setInterval(async () => {
     try {
       // ── B. Confidence Threshold raised to 45% to reduce hallucinations ──
-      const result = await ObjectDetection.detectFromStream({ confidence: 0.45 });
+      const result = await ObjectDetection.detectFromStream({ confidence: 0.45, includeFrame: true });
+
+      // Store camera frame for live preview
+      if (result.frame) cameraFrame.value = result.frame;
 
       const now      = Date.now();
       const canSpeak = !isSpeaking.value && (now - lastSpokenTime.value >= SPEAK_DELAY);
 
       if (result.nearest) {
         nearestObject.value = result.nearest;
-        const { class: objClass, distance, direction } = result.nearest;
 
-        // ── Temporal Consistency Filter ──────────────────────────────────
-        // Same class must appear N consecutive frames to suppress flicker
-        if (objClass === lastDetectedClass.value) {
-          consecutiveCount.value++;
-        } else {
-          lastDetectedClass.value = objClass;
-          consecutiveCount.value = 1;
-        }
+        if (canSpeak) {
+          const { class: objClass, distance, direction } = result.nearest;
 
-        const isStable = consecutiveCount.value >= CONSECUTIVE_THRESHOLD;
-
-        if (canSpeak && isStable) {
-          // ── Direction & Distance Gating ──────────────────────────────────
+          // ── Direction & Distance Gating ────────────────────────────────
           // Ahead: medium distance or closer. Sides: very close only.
           const shouldSpeak =
             (direction === 'ahead' && distance !== 'far') ||
@@ -455,8 +444,6 @@ const startDetection = () => {
         }
       } else {
         nearestObject.value = null;
-        lastDetectedClass.value = '';
-        consecutiveCount.value = 0;
       }
 
     } catch (err) {
@@ -736,6 +723,15 @@ const goToWearableSetup = () => {
           </svg>
           Change Camera IPs
         </button>
+      </div>
+
+      <!-- Camera Preview -->
+      <div v-if="cameraFrame" class="bg-white rounded-2xl shadow ring-1 ring-gray-100 p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-sm font-bold tracking-tight text-gray-800">Camera Preview</h2>
+          <span class="text-[10px] font-medium tracking-wide uppercase text-gray-400">{{ activeCamera }} cam</span>
+        </div>
+        <img :src="cameraFrame" alt="Camera feed" class="w-full rounded-xl bg-gray-200" />
       </div>
 
       <!-- Detection (Alert Banner) -->
