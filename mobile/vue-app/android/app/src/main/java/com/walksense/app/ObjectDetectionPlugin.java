@@ -1,6 +1,10 @@
 package com.walksense.app;
 
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.util.Base64;
 import android.util.Log;
 
@@ -19,7 +23,12 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+
+import org.tensorflow.lite.gpu.GpuDelegate;
+import org.tensorflow.lite.gpu.CompatibilityList;
 
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -46,6 +55,7 @@ public class ObjectDetectionPlugin extends Plugin {
     public static final String CAM_NIGHT = "night";
 
     private Interpreter tflite;
+    private GpuDelegate gpuDelegate;
 
     // Two independent stream services
     private ESP32StreamService dayStreamService;
@@ -64,6 +74,16 @@ public class ObjectDetectionPlugin extends Plugin {
     private boolean dayFirstFrame        = false;
     private boolean nightFirstFrame      = false;
 
+    // ===== Temporal Tracking (close-proximity misclassification fix) =====
+    // Sliding window of recent detection classes and their frame occupancy ratios.
+    // Used to detect and correct sudden class flips (e.g., car → wall) when an
+    // object's surface fills the entire frame at very close range.
+    private static final int CLASS_HISTORY_SIZE = 5;
+    private final List<String> classHistory = new ArrayList<>();
+    private final List<Float>  ratioHistory = new ArrayList<>();
+    private static final float IMMINENT_OCCUPANCY_THRESHOLD = 0.85f;
+    private static final float TEMPORAL_OVERRIDE_THRESHOLD  = 0.60f;
+
     // ===== Distance & Direction =====
 
     private String estimateDistance(float bboxArea, float frameArea) {
@@ -72,6 +92,78 @@ public class ObjectDetectionPlugin extends Plugin {
         else if (ratio > 0.15f) return "close";
         else if (ratio > 0.05f) return "medium distance";
         else return "far";
+    }
+
+    // ===== Close-Proximity Detection Helpers =====
+
+    /**
+     * Checks if the detected object occupies an extreme portion of the frame,
+     * indicating the user is at touching distance regardless of classification.
+     * At chest-mount height, 85% frame occupancy ≈ 20-30cm from a car door.
+     */
+    private boolean isFrameFillingDetection(Detection det) {
+        float bboxArea  = (det.x2 - det.x1) * (det.y2 - det.y1);
+        float frameArea = INPUT_SIZE * INPUT_SIZE;
+        return (bboxArea / frameArea) > IMMINENT_OCCUPANCY_THRESHOLD;
+    }
+
+    /**
+     * If the current detection is "wall" but recent history shows a consistent
+     * non-wall class (e.g. car), override the classification.  This handles the
+     * case where a large object's surface fills the frame at close range and
+     * the YOLO model sees only a flat painted surface.
+     *
+     * Returns the corrected class name, or null if no override is needed.
+     */
+    private String getTemporalOverrideClass(Detection det) {
+        float bboxArea  = (det.x2 - det.x1) * (det.y2 - det.y1);
+        float frameArea = INPUT_SIZE * INPUT_SIZE;
+        float ratio     = bboxArea / frameArea;
+
+        // Only consider override when current detection is "wall" or "glass wall"
+        // filling >60% of the frame
+        if ((!det.className.equals("wall") && !det.className.equals("glass wall"))
+                || ratio < TEMPORAL_OVERRIDE_THRESHOLD) {
+            return null;
+        }
+        if (classHistory.size() < 3) return null;
+
+        // Find dominant non-wall class in recent history
+        Map<String, Integer> counts = new HashMap<>();
+        for (String cls : classHistory) {
+            if (!cls.equals("wall") && !cls.equals("glass wall") && !cls.equals("none")) {
+                counts.put(cls, counts.getOrDefault(cls, 0) + 1);
+            }
+        }
+
+        String dominant = null;
+        int maxCount = 0;
+        for (Map.Entry<String, Integer> entry : counts.entrySet()) {
+            if (entry.getValue() > maxCount) {
+                maxCount = entry.getValue();
+                dominant = entry.getKey();
+            }
+        }
+
+        // Need ≥3 occurrences of the same non-wall class to override
+        if (dominant != null && maxCount >= 3) {
+            Log.d(TAG, "[Temporal] Overriding '" + det.className + "' → '" + dominant
+                    + "' (appeared " + maxCount + "/" + classHistory.size() + " recent frames)");
+            return dominant;
+        }
+        return null;
+    }
+
+    /**
+     * Pushes a detection result into the sliding window and trims to size.
+     */
+    private void pushClassHistory(String className, float bboxRatio) {
+        classHistory.add(className);
+        ratioHistory.add(bboxRatio);
+        while (classHistory.size() > CLASS_HISTORY_SIZE) {
+            classHistory.remove(0);
+            ratioHistory.remove(0);
+        }
     }
 
     private String getDirection(float centerX, int frameWidth) {
@@ -88,14 +180,44 @@ public class ObjectDetectionPlugin extends Plugin {
     public void loadModel(PluginCall call) {
         try {
             Log.d(TAG, "Loading TFLite model...");
-            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "walksense_float16.tflite");
+            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "v4_latest_best_float16.tflite");
             Interpreter.Options options = new Interpreter.Options();
-            options.setNumThreads(4);
+
+            // GPU acceleration with CPU fallback
+            boolean usingGpu = false;
+            try {
+                CompatibilityList compatList = new CompatibilityList();
+                if (compatList.isDelegateSupportedOnThisDevice()) {
+                    GpuDelegate.Options gpuOptions = compatList.getBestOptionsForThisDevice();
+                    gpuDelegate = new GpuDelegate(gpuOptions);
+                    options.addDelegate(gpuDelegate);
+                    usingGpu = true;
+                    Log.d(TAG, "✓ GPU delegate enabled");
+                } else {
+                    Log.d(TAG, "⚠ GPU not supported on this device — using CPU");
+                }
+            } catch (Exception gpuError) {
+                Log.w(TAG, "GPU delegate failed: " + gpuError.getMessage() + " — using CPU");
+                if (gpuDelegate != null) {
+                    gpuDelegate.close();
+                    gpuDelegate = null;
+                }
+                options = new Interpreter.Options();
+            }
+
+            if (!usingGpu) {
+                options.setNumThreads(4);
+            }
+
             tflite = new Interpreter(model, options);
             isModelLoaded = true;
-            Log.d(TAG, "✓ Model loaded");
+
+            String accel = usingGpu ? "GPU" : "CPU";
+            Log.d(TAG, "✓ Model loaded [" + accel + "]");
+
             JSObject ret = new JSObject();
             ret.put("success", true);
+            ret.put("acceleration", accel);
             call.resolve(ret);
         } catch (Exception e) {
             Log.e(TAG, "Model load failed", e);
@@ -289,7 +411,12 @@ public class ObjectDetectionPlugin extends Plugin {
         }
 
         activeCamera = cam;
-        Log.d(TAG, "✓ Active camera switched to: " + cam);
+
+        // Clear temporal tracking history on camera switch to avoid
+        // cross-camera false overrides (different FOV, exposure, etc.)
+        classHistory.clear();
+        ratioHistory.clear();
+        Log.d(TAG, "✓ Active camera switched to: " + cam + " (history cleared)");
 
         JSObject ret = new JSObject();
         ret.put("success", true);
@@ -332,8 +459,11 @@ public class ObjectDetectionPlugin extends Plugin {
             resized = Bitmap.createScaledBitmap(frameToProcess, INPUT_SIZE, INPUT_SIZE, true);
             ByteBuffer inputBuffer = convertBitmapToByteBuffer(resized);
 
-            float[][][] outputTransposed = new float[1][25][2100];
+            float[][][] outputTransposed = new float[1][32][2100];
+            long inferenceStart = System.currentTimeMillis();
             tflite.run(inputBuffer, outputTransposed);
+            long inferenceMs = System.currentTimeMillis() - inferenceStart;
+            Log.d(TAG, "[Perf] Inference: " + inferenceMs + "ms");
 
             Double confidenceParam = call.getDouble("confidence", 0.45);
             float confidenceThreshold = confidenceParam != null ? confidenceParam.floatValue() : 0.45f;
@@ -348,27 +478,55 @@ public class ObjectDetectionPlugin extends Plugin {
             if (nearest != null) {
                 float bboxArea  = (nearest.x2 - nearest.x1) * (nearest.y2 - nearest.y1);
                 float frameArea = INPUT_SIZE * INPUT_SIZE;
+                float bboxRatio = bboxArea / frameArea;
 
-                String distance  = estimateDistance(bboxArea, frameArea);
+                // ── Layer 2: Temporal Class Override ──────────────────────────
+                // Check if "wall"/"glass wall" should actually be the class that
+                // was consistently detected in recent frames (e.g., car)
+                String overrideClass = getTemporalOverrideClass(nearest);
+                if (overrideClass != null) {
+                    nearest.className = overrideClass;
+                }
+
+                // ── Layer 1: Frame Occupancy Heuristic ───────────────────────
+                // If a single detection fills >85% of the frame, the user is at
+                // collision distance — override to "imminent" regardless of class
+                boolean imminent = isFrameFillingDetection(nearest);
+
+                String distance  = imminent ? "imminent" : estimateDistance(bboxArea, frameArea);
                 String direction = getDirection((nearest.x1 + nearest.x2) / 2, INPUT_SIZE);
+
+                // Push into sliding window for future temporal tracking
+                pushClassHistory(nearest.className, bboxRatio);
+
+                Log.d(TAG, String.format(
+                    "[Proximity] class=%s | ratio=%.2f | imminent=%s | override=%s",
+                    nearest.className, bboxRatio, imminent, overrideClass != null ? overrideClass : "none"
+                ));
 
                 JSObject nearestObj = new JSObject();
                 nearestObj.put("class",      nearest.className);
                 nearestObj.put("distance",   distance);
                 nearestObj.put("direction",  direction);
                 nearestObj.put("confidence", nearest.confidence);
-                nearestObj.put("camera",     activeCamera);  // tell Vue which cam detected it
+                nearestObj.put("camera",     activeCamera);
+                nearestObj.put("imminent",   imminent);
 
                 ret.put("nearest", nearestObj);
+            } else {
+                // No detection — push empty into history to naturally age out old entries
+                pushClassHistory("none", 0f);
             }
 
-            // Encode frame as base64 JPEG if requested by Vue
+            // Draw bounding boxes and encode frame as base64 JPEG if requested
             if (includeFrame && frameToProcess != null && !frameToProcess.isRecycled()) {
                 try {
+                    Bitmap annotated = drawDetections(frameToProcess, detections);
                     ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                    frameToProcess.compress(Bitmap.CompressFormat.JPEG, 50, baos);
+                    annotated.compress(Bitmap.CompressFormat.JPEG, 50, baos);
                     String base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
                     ret.put("frame", "data:image/jpeg;base64," + base64);
+                    if (annotated != frameToProcess) annotated.recycle();
                 } catch (Exception encodeErr) {
                     Log.w(TAG, "Frame encode skipped: " + encodeErr.getMessage());
                 }
@@ -552,6 +710,86 @@ public class ObjectDetectionPlugin extends Plugin {
 
     // ===== Helper Methods =====
 
+    // ===== Bounding Box Drawing =====
+
+    private Bitmap drawDetections(Bitmap original, List<Detection> detections) {
+        Bitmap annotated = original.copy(Bitmap.Config.ARGB_8888, true);
+        Canvas canvas = new Canvas(annotated);
+
+        float scaleX = annotated.getWidth()  / (float) INPUT_SIZE;
+        float scaleY = annotated.getHeight() / (float) INPUT_SIZE;
+
+        Paint boxPaint  = new Paint();
+        boxPaint.setStyle(Paint.Style.STROKE);
+        boxPaint.setStrokeWidth(3f);
+        boxPaint.setAntiAlias(true);
+
+        Paint bgPaint = new Paint();
+        bgPaint.setStyle(Paint.Style.FILL);
+
+        Paint textPaint = new Paint();
+        textPaint.setColor(Color.WHITE);
+        textPaint.setTextSize(28f);
+        textPaint.setAntiAlias(true);
+        textPaint.setFakeBoldText(true);
+
+        for (Detection det : detections) {
+            int color = getClassColor(det.className);
+            boxPaint.setColor(color);
+            bgPaint.setColor(color);
+
+            float left   = det.x1 * scaleX;
+            float top    = det.y1 * scaleY;
+            float right  = det.x2 * scaleX;
+            float bottom = det.y2 * scaleY;
+
+            canvas.drawRect(left, top, right, bottom, boxPaint);
+
+            String label = det.className + " " + Math.round(det.confidence * 100) + "%";
+            float textWidth  = textPaint.measureText(label);
+            float textHeight = 32f;
+            float labelTop   = Math.max(0, top - textHeight);
+
+            canvas.drawRect(left, labelTop, left + textWidth + 8, labelTop + textHeight, bgPaint);
+            canvas.drawText(label, left + 4, labelTop + textHeight - 6, textPaint);
+        }
+        return annotated;
+    }
+
+    private int getClassColor(String className) {
+        switch (className) {
+            case "person":          return 0xFF4CAF50;  // green
+            case "group of people": return 0xFF8BC34A;  // light green
+            case "car":             return 0xFF2196F3;  // blue
+            case "bus":             return 0xFFFF9800;  // orange
+            case "motorcycle":      return 0xFF9C27B0;  // purple
+            case "truck":           return 0xFF3F51B5;  // indigo
+            case "bollards":        return 0xFFFFEB3B;  // yellow
+            case "stairs":          return 0xFFFFC107;  // amber
+            case "door":            return 0xFF795548;  // brown
+            case "chair":           return 0xFF607D8B;  // blue-grey
+            case "couch":           return 0xFF9E9E9E;  // grey
+            case "table":           return 0xFF8D6E63;  // brown-light
+            case "pothole":         return 0xFFF44336;  // red
+            case "pole":            return 0xFFE91E63;  // pink
+            case "dog":             return 0xFFFF5722;  // deep orange
+            case "wall":            return 0xFF78909C;  // blue-grey
+            case "glass wall":      return 0xFF00BCD4;  // cyan
+            case "cabinet":         return 0xFF6D4C41;  // dark brown
+            case "window":          return 0xFF26C6DA;  // light cyan
+            case "tricycle":        return 0xFFAB47BC;  // light purple
+            case "standing aircon": return 0xFF5C6BC0;  // indigo-light
+            case "bench":           return 0xFFEF6C00;  // dark orange
+            case "fence":           return 0xFFD4E157;  // lime
+            case "gate":            return 0xFF8E24AA;  // deep purple
+            case "refrigerator":    return 0xFF00897B;  // teal
+            case "trash can":       return 0xFFE53935;  // red-dark
+            case "tree":            return 0xFF2E7D32;  // dark green
+            case "stall":           return 0xFFFF7043;  // light deep orange
+            default:                return 0xFF00FFFF;  // cyan fallback
+        }
+    }
+
     private ByteBuffer convertBitmapToByteBuffer(Bitmap bitmap) {
         ByteBuffer byteBuffer = ByteBuffer.allocateDirect(4 * INPUT_SIZE * INPUT_SIZE * 3);
         byteBuffer.order(ByteOrder.nativeOrder());
@@ -580,7 +818,7 @@ public class ObjectDetectionPlugin extends Plugin {
 
             int classId = 0;
             float maxClassScore = output[4][i];
-            for (int j = 5; j < 25; j++) {
+            for (int j = 5; j < 32; j++) {
                 if (output[j][i] > maxClassScore) {
                     maxClassScore = output[j][i];
                     classId = j - 4;
@@ -588,6 +826,14 @@ public class ObjectDetectionPlugin extends Plugin {
             }
 
             if (maxClassScore < threshold) continue;
+
+            // ── Per-class confidence override ──────────────────────────────
+            // Door hallucinations (partial windows, chartboards, wall panels)
+            // typically fire at 0.45–0.60. Real doors trigger at 0.65+.
+            String className = getClassName(classId);
+            if (className.equals("door") && maxClassScore < 0.60f) continue;
+            if (className.equals("pothole") && maxClassScore < 0.35f) continue;
+            if (className.equals("stairs") && maxClassScore < 0.35f) continue;
 
             float x1 = Math.max(0, Math.min(INPUT_SIZE - 1, (cx - w / 2) * INPUT_SIZE));
             float y1 = Math.max(0, Math.min(INPUT_SIZE - 1, (cy - h / 2) * INPUT_SIZE));
@@ -630,7 +876,14 @@ public class ObjectDetectionPlugin extends Plugin {
             case "tree":             return 0.8f;
             case "motorcycle":       return 0.9f;
             case "car":              return 0.7f;
-            case "pedicab":          return 0.9f;  // similar to motorcycle
+            case "tricycle":         return 0.9f;  // replaces pedicab
+            case "standing aircon":  return 1.2f;  // medium-sized indoor obstacle
+            case "bench":            return 1.5f;  // low ground-level obstacle
+            case "fence":            return 0.8f;  // usually seen at distance
+            case "gate":             return 1.0f;  // similar to door
+            case "refrigerator":     return 1.2f;  // large indoor obstacle
+            case "trash can":        return 2.0f;  // narrow, trip hazard
+            case "stall":            return 0.7f;  // large fixed structure
             // ── Very large objects: penalize so far-away does not trigger ────
             case "wall":             return 0.5f;
             case "glass wall":       return 0.5f;
@@ -696,19 +949,26 @@ public class ObjectDetectionPlugin extends Plugin {
                 "truck",             // 5
                 "bollards",          // 6
                 "stairs",            // 7
-                "tree",              // 8
-                "door",              // 9
-                "chair",             // 10
-                "couch",             // 11
-                "table",             // 12
-                "pothole",           // 13
-                "pole",              // 14
-                "dog",               // 15
-                "wall",              // 16
-                "glass wall",        // 17
-                "cabinet",           // 18
-                "window",            // 19
-                "pedicab"            // 20
+                "door",              // 8
+                "chair",             // 9
+                "couch",             // 10
+                "table",             // 11
+                "pothole",           // 12
+                "pole",              // 13
+                "dog",               // 14
+                "wall",              // 15
+                "glass wall",        // 16
+                "cabinet",           // 17
+                "window",            // 18
+                "tricycle",          // 19
+                "standing aircon",   // 20
+                "bench",             // 21
+                "fence",             // 22
+                "gate",              // 23
+                "refrigerator",      // 24
+                "trash can",         // 25
+                "tree",              // 26
+                "stall"              // 27
         };
         if (classId >= 0 && classId < classes.length) return classes[classId];
         return "obstacle";
@@ -742,7 +1002,8 @@ public class ObjectDetectionPlugin extends Plugin {
 
     @PluginMethod
     public void unloadModel(PluginCall call) {
-        if (tflite != null) { tflite.close(); isModelLoaded = false; }
+        if (tflite != null) { tflite.close(); tflite = null; isModelLoaded = false; }
+        if (gpuDelegate != null) { gpuDelegate.close(); gpuDelegate = null; }
         synchronized (dayFrameLock) {
             if (latestDayFrame != null && !latestDayFrame.isRecycled()) {
                 latestDayFrame.recycle(); latestDayFrame = null;

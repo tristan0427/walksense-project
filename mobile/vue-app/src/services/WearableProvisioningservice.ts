@@ -313,22 +313,50 @@ class WearableProvisioningService {
     }
 
     /**
-     * Discovery only — skips BLE, verifies boards are reachable and saves real IPs.
+     * Discovery only — skips BLE entirely.
+     * Uses native TCP subnet scanner directly (no mDNS, no delay).
+     * Retries once if a board is missing on first scan.
      */
     async rediscoverBoards(onStatus: StatusCallback): Promise<void> {
         this.onStatus = onStatus;
-        this.emit({ status: 'scanning_subnet', message: 'Looking for cameras on network...' });
+        this.emit({ status: 'scanning_subnet', message: 'Scanning hotspot network for cameras...' });
 
-        const DAY_HOST   = 'walksense-day.local';
-        const NIGHT_HOST = 'walksense-night.local';
+        let dayBoard: BoardInfo | null = null;
+        let nightBoard: BoardInfo | null = null;
 
-        // Run both in parallel — no dependency between them
-        const [dayBoard, nightBoard] = await Promise.all([
-            this.waitForBoardByHostname('day',   DAY_HOST,   15000),
-            this.waitForBoardByHostname('night', NIGHT_HOST, 15000),
-        ]);
+        const scanOnce = async (): Promise<void> => {
+            try {
+                const result = await ObjectDetection.scanHotspotNetwork({
+                    port:    82,
+                    path:    '/identity',
+                    timeout: 2500,
+                });
+                if (result.success && result.boards) {
+                    for (const b of result.boards) {
+                        if (!dayBoard && b.board === 'day' && b.ip) {
+                            dayBoard = { board: 'day', ip: b.ip, ble_name: b.ble_name || '' };
+                            this.emit({ status: 'scanning_subnet', message: `✅ Day camera found at ${b.ip}` });
+                        }
+                        if (!nightBoard && b.board === 'night' && b.ip) {
+                            nightBoard = { board: 'night', ip: b.ip, ble_name: b.ble_name || '' };
+                            this.emit({ status: 'scanning_subnet', message: `✅ Night camera found at ${b.ip}` });
+                        }
+                    }
+                }
+            } catch (err: any) {
+                console.warn('[Rediscovery] Subnet scan error:', err.message);
+            }
+        };
 
-        // Save real IPs extracted from identity response
+        await scanOnce();
+
+        // Retry once if a board is still missing
+        if (!dayBoard || !nightBoard) {
+            this.emit({ status: 'scanning_subnet', message: 'Retrying scan for remaining cameras...' });
+            await this.delay(3000);
+            await scanOnce();
+        }
+
         if (dayBoard)   localStorage.setItem('dayCamIp',   dayBoard.ip);
         if (nightBoard) localStorage.setItem('nightCamIp', nightBoard.ip);
 

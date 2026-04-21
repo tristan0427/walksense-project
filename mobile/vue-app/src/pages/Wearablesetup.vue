@@ -187,6 +187,26 @@ const resetAndReprovision = async () => {
         </ol>
       </div>
 
+      <!-- Quick Find — boards already on hotspot -->
+      <div class="bg-green-50 border border-green-200 rounded-2xl p-4 space-y-2">
+        <p class="text-sm font-semibold text-green-800">Cameras already connected to your hotspot?</p>
+        <p class="text-xs text-green-700">Tap below to find them — no credentials needed.</p>
+        <button
+            v-if="!isRunning"
+            @click="rediscover"
+            class="w-full py-2.5 rounded-xl text-sm font-semibold text-green-800 bg-white border border-green-300 hover:bg-green-50 transition"
+        >
+          Find Cameras on Network
+        </button>
+        <button
+            v-else
+            disabled
+            class="w-full py-2.5 rounded-xl text-sm font-semibold text-gray-400 bg-gray-200 cursor-not-allowed"
+        >
+          Scanning...
+        </button>
+      </div>
+
       <!-- Credentials form -->
       <div class="bg-white rounded-2xl shadow p-4 space-y-3">
         <h2 class="font-semibold text-gray-800">Your Hotspot Credentials</h2>
@@ -252,13 +272,6 @@ const resetAndReprovision = async () => {
           <span v-else>Start Wearable Setup</span>
         </button>
 
-        <button
-            v-if="!isRunning"
-            @click="rediscover"
-            class="w-full py-2.5 rounded-xl text-sm text-gray-600 border border-gray-300 hover:bg-gray-50"
-        >
-          Find cameras (already provisioned)
-        </button>
       </div>
 
       <!-- Current Status Card -->

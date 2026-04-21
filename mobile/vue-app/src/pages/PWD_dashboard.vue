@@ -143,9 +143,11 @@ onMounted(async () => {
   const guardianStr = localStorage.getItem('guardian');
   if (guardianStr) guardian.value = JSON.parse(guardianStr);
 
-  // Connect cameras if IPs are already saved
+  // Connect cameras if IPs saved, otherwise auto-discover on hotspot
   if (dayCamIp.value || nightCamIp.value) {
     await connectBothCameras();
+  } else {
+    await autoDiscoverCameras();
   }
   
   if (dayCamIp.value) {
@@ -188,6 +190,37 @@ const connectBothCameras = async () => {
       console.error('Night cam start failed:', err);
       nightCamStatus.value = 'Failed to start';
     }
+  }
+};
+
+// Auto-discover cameras when no IPs saved (fresh install / reinstall)
+const autoDiscoverCameras = async () => {
+  try {
+    console.log('[AutoDiscovery] No saved IPs — scanning hotspot...');
+    const result = await ObjectDetection.scanHotspotNetwork({
+      port: 82,
+      path: '/identity',
+      timeout: 2500,
+    });
+    if (result.success && result.boards) {
+      for (const b of result.boards) {
+        if (b.board === 'day' && b.ip) {
+          dayCamIp.value = b.ip;
+          localStorage.setItem('dayCamIp', b.ip);
+          console.log(`[AutoDiscovery] ✅ Day camera at ${b.ip}`);
+        }
+        if (b.board === 'night' && b.ip) {
+          nightCamIp.value = b.ip;
+          localStorage.setItem('nightCamIp', b.ip);
+          console.log(`[AutoDiscovery] ✅ Night camera at ${b.ip}`);
+        }
+      }
+      if (dayCamIp.value || nightCamIp.value) {
+        await connectBothCameras();
+      }
+    }
+  } catch (err) {
+    console.log('[AutoDiscovery] Scan failed:', err.message);
   }
 };
 
@@ -409,28 +442,49 @@ const startDetection = () => {
       if (result.nearest) {
         nearestObject.value = result.nearest;
 
-        if (canSpeak) {
-          const { class: objClass, distance, direction } = result.nearest;
+        const { class: objClass, distance, direction } = result.nearest;
+        const isImminent = distance === 'imminent';
 
+        // ── Imminent: bypass cooldown, always speak urgently ──────────
+        // ── Normal:   respect cooldown + direction/distance gating ────
+        const shouldHandleTTS = isImminent
+          ? !isSpeaking.value   // only gate: not already mid-speech
+          : canSpeak;
+
+        if (shouldHandleTTS) {
           // ── Direction & Distance Gating ────────────────────────────────
+          // Imminent: always speak (collision distance, class doesn't matter).
           // Ahead: medium distance or closer. Sides: very close only.
-          const shouldSpeak =
+          const shouldSpeak = isImminent ||
             (direction === 'ahead' && distance !== 'far') ||
             (direction !== 'ahead' && distance === 'very close');
 
           if (shouldSpeak) {
-            // Natural TTS: "Car close ahead" / "Wall very close on your left"
-            const locationPhrase = direction === 'ahead'
-              ? 'ahead'
-              : `on your ${direction}`;
-            const msg = `${objClass} ${distance} ${locationPhrase}`;
+            let msg;
+            let ttsRate;
+
+            if (isImminent) {
+              // Urgent phrasing: "Warning! Car directly ahead, stop!"
+              const locationPhrase = direction === 'ahead'
+                ? 'directly ahead'
+                : `on your ${direction}`;
+              msg = `Warning! ${objClass} ${locationPhrase}, stop!`;
+              ttsRate = 1.2;
+            } else {
+              // Normal phrasing: "Car close ahead" / "Wall very close on your left"
+              const locationPhrase = direction === 'ahead'
+                ? 'ahead'
+                : `on your ${direction}`;
+              msg = `${objClass} ${distance} ${locationPhrase}`;
+              ttsRate = 0.9;
+            }
 
             isSpeaking.value = true;
             try {
               await TextToSpeech.speak({
                 text: msg,
                 lang: 'en-US',
-                rate: 0.9,
+                rate: ttsRate,
                 pitch: 1.0,
                 volume: 1.0
               });
@@ -741,13 +795,23 @@ const goToWearableSetup = () => {
           <span class="text-[10px] font-medium tracking-wide uppercase text-gray-400">via {{ nearestObject?.camera || activeCamera }} cam</span>
         </div>
 
-        <!-- Detected -->
-        <div v-if="nearestObject" class="border-l-4 border-orange-400 bg-orange-50 rounded-r-xl p-3">
+        <!-- Detected: imminent = red pulsing, normal = orange -->
+        <div v-if="nearestObject" :class="[
+          'border-l-4 rounded-r-xl p-3',
+          nearestObject.distance === 'imminent'
+            ? 'border-red-500 bg-red-50 animate-pulse'
+            : 'border-orange-400 bg-orange-50'
+        ]">
           <p class="text-2xl font-black text-gray-800 capitalize">{{ nearestObject.class }}</p>
           <div class="flex flex-wrap gap-2 mt-2">
-            <span class="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-200 text-orange-800">
+            <span :class="[
+              'inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full',
+              nearestObject.distance === 'imminent'
+                ? 'bg-red-200 text-red-800'
+                : 'bg-orange-200 text-orange-800'
+            ]">
               <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
-              {{ nearestObject.distance }}
+              {{ nearestObject.distance === 'imminent' ? '⚠ IMMINENT' : nearestObject.distance }}
             </span>
             <span class="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-800">
               <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>

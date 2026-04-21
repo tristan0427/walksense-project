@@ -14,13 +14,18 @@ export interface ObjectDetectionPlugin {
 
     detectFromStream(options: {
         confidence?: number;
+        includeFrame?: boolean;
     }): Promise<{
         success: boolean;
+        frame?: string;
+        activeCamera?: string;
         nearest?: {
             class: string;
             distance: string;
             direction: string;
             confidence: number;
+            camera: string;
+            imminent: boolean;
         };
     }>;
 
