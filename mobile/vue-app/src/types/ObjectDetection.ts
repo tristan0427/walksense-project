@@ -12,6 +12,8 @@ export interface ObjectDetectionPlugin {
 
     switchActiveCamera(options: { camera: 'day' | 'night' }): Promise<{ success: boolean; activeCamera: string }>;
 
+    setDiagnosticsMode(options: { enabled: boolean }): Promise<{ success: boolean; diagnosticsEnabled: boolean }>;
+
     detectFromStream(options: {
         confidence?: number;
         includeFrame?: boolean;
@@ -26,6 +28,11 @@ export interface ObjectDetectionPlugin {
             confidence: number;
             camera: string;
             imminent: boolean;
+        };
+        metrics?: {
+            inferenceMs: number;
+            detectMs: number;
+            diagnosticsEnabled: boolean;
         };
     }>;
 

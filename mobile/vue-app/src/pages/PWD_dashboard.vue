@@ -60,8 +60,31 @@ const nearestObject     = ref(null);
 const detectionInterval = ref(null);
 const lastSpokenTime    = ref(0);
 const isSpeaking        = ref(false);
-const SPEAK_DELAY       = 3000;
+const runtimeMode       = ref('navigation_mode'); // navigation_mode | diagnostic_mode
 const cameraFrame       = ref(null);  // base64 data URI from detection
+const perfMetrics = ref({
+  detectCalls: 0,
+  avgDetectMs: 0,
+  avgInferenceMs: 0,
+});
+let previewFrameCounter = 0;
+
+const TIER_1_CLASSES = new Set(['pothole', 'glass wall', 'stairs']);
+const TIER_2_CLASSES = new Set(['car', 'tricycle', 'motorcycle', 'truck', 'bus', 'person', 'group of people']);
+const TIER_3_CLASSES = new Set([
+  'pole', 'tree', 'bench', 'trash can', 'fence', 'standing aircon', 'bollards',
+  'chair', 'table', 'couch', 'cabinet', 'refrigerator', 'stall'
+]);
+const TIER_4_CLASSES = new Set(['gate', 'door', 'window', 'wall']);
+
+const TIER_COOLDOWN_MS = {
+  tier1: 0,
+  tier2: 1800,
+  tier3: 6000,
+  tier4: 9000,
+};
+
+const lastSpokenByClass = new Map();
 
 // ── IP Setup form ────────────────────────────────────────────────────────────
 const ipFormDay   = ref(dayCamIp.value);
@@ -131,6 +154,7 @@ onMounted(async () => {
   // Load model
   try {
     await ObjectDetection.loadModel();
+    await ObjectDetection.setDiagnosticsMode({ enabled: runtimeMode.value === 'diagnostic_mode' });
     console.log('✓ Model loaded');
   } catch (err) {
     console.error('Model load failed:', err);
@@ -430,34 +454,27 @@ const startDetection = () => {
   console.log('Starting detection loop');
   detectionInterval.value = setInterval(async () => {
     try {
-      // ── B. Confidence Threshold raised to 45% to reduce hallucinations ──
-      const result = await ObjectDetection.detectFromStream({ confidence: 0.45, includeFrame: true });
+      previewFrameCounter += 1;
+      const includeFrame = runtimeMode.value === 'diagnostic_mode' && previewFrameCounter % 2 === 0;
+      const result = await ObjectDetection.detectFromStream({ confidence: 0.38, includeFrame });
 
       // Store camera frame for live preview
-      if (result.frame) cameraFrame.value = result.frame;
-
-      const now      = Date.now();
-      const canSpeak = !isSpeaking.value && (now - lastSpokenTime.value >= SPEAK_DELAY);
+      cameraFrame.value = result.frame || null;
+      updatePerfMetrics(result.metrics);
+      const now = Date.now();
 
       if (result.nearest) {
         nearestObject.value = result.nearest;
 
         const { class: objClass, distance, direction } = result.nearest;
         const isImminent = distance === 'imminent';
+        const tier = getClassTier(objClass);
+        const canSpeak = canSpeakClass(tier, objClass, now);
 
-        // ── Imminent: bypass cooldown, always speak urgently ──────────
-        // ── Normal:   respect cooldown + direction/distance gating ────
-        const shouldHandleTTS = isImminent
-          ? !isSpeaking.value   // only gate: not already mid-speech
-          : canSpeak;
+        const shouldHandleTTS = isImminent ? true : canSpeak;
 
         if (shouldHandleTTS) {
-          // ── Direction & Distance Gating ────────────────────────────────
-          // Imminent: always speak (collision distance, class doesn't matter).
-          // Ahead: medium distance or closer. Sides: very close only.
-          const shouldSpeak = isImminent ||
-            (direction === 'ahead' && distance !== 'far') ||
-            (direction !== 'ahead' && distance === 'very close');
+          const shouldSpeak = shouldSpeakAlert(tier, direction, distance, isImminent);
 
           if (shouldSpeak) {
             let msg;
@@ -479,6 +496,12 @@ const startDetection = () => {
               ttsRate = 0.9;
             }
 
+            if (tier === 'tier1') {
+              try { await TextToSpeech.stop(); } catch (e) {}
+            } else if (isSpeaking.value) {
+              return;
+            }
+
             isSpeaking.value = true;
             try {
               await TextToSpeech.speak({
@@ -489,6 +512,7 @@ const startDetection = () => {
                 volume: 1.0
               });
               lastSpokenTime.value = Date.now();
+              lastSpokenByClass.set(objClass, lastSpokenTime.value);
             } catch (ttsError) {
               console.error('TTS error:', ttsError);
             } finally {
@@ -513,6 +537,39 @@ const startDetection = () => {
 const stopDetection = () => {
   if (detectionInterval.value) clearInterval(detectionInterval.value);
   detectionInterval.value = null;
+};
+
+const getClassTier = (className) => {
+  if (TIER_1_CLASSES.has(className)) return 'tier1';
+  if (TIER_2_CLASSES.has(className)) return 'tier2';
+  if (TIER_3_CLASSES.has(className)) return 'tier3';
+  if (TIER_4_CLASSES.has(className)) return 'tier4';
+  return 'tier3';
+};
+
+const canSpeakClass = (tier, className, now) => {
+  const lastClassSpokenAt = lastSpokenByClass.get(className) || 0;
+  const cooldown = TIER_COOLDOWN_MS[tier] ?? 4000;
+  return now - lastClassSpokenAt >= cooldown;
+};
+
+const shouldSpeakAlert = (tier, direction, distance, isImminent) => {
+  if (isImminent || tier === 'tier1') return true;
+  if (tier === 'tier2') return direction === 'ahead' || distance === 'very close';
+  if (tier === 'tier3') return direction === 'ahead' && distance !== 'far';
+  return direction === 'ahead' && (distance === 'close' || distance === 'very close');
+};
+
+const updatePerfMetrics = (metrics) => {
+  if (!metrics) return;
+  perfMetrics.value.detectCalls += 1;
+  const n = perfMetrics.value.detectCalls;
+  perfMetrics.value.avgDetectMs = Math.round(
+    ((perfMetrics.value.avgDetectMs * (n - 1)) + (metrics.detectMs || 0)) / n
+  );
+  perfMetrics.value.avgInferenceMs = Math.round(
+    ((perfMetrics.value.avgInferenceMs * (n - 1)) + (metrics.inferenceMs || 0)) / n
+  );
 };
 
 // ── GPS ───────────────────────────────────────────────────────────────────────

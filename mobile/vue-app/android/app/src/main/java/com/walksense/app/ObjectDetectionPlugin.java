@@ -23,6 +23,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.MappedByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,12 +44,17 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 @CapacitorPlugin(name = "ObjectDetection")
 public class ObjectDetectionPlugin extends Plugin {
 
     private static final String TAG = "ObjectDetection";
     private static final int INPUT_SIZE = 320;
+    private static final float DEFAULT_CONFIDENCE = 0.38f;
+    private static final int SCAN_POOL_SIZE = 20;
+    private static final int MAX_SCAN_RESULTS = 2;
 
     // Camera type constants
     public static final String CAM_DAY   = "day";
@@ -73,6 +79,19 @@ public class ObjectDetectionPlugin extends Plugin {
     private boolean isModelLoaded        = false;
     private boolean dayFirstFrame        = false;
     private boolean nightFirstFrame      = false;
+    private boolean diagnosticsEnabled   = false;
+
+    // ===== Baseline Perf Counters =====
+    private final AtomicLong detectCalls = new AtomicLong(0);
+    private final AtomicLong totalInferenceMs = new AtomicLong(0);
+    private final AtomicLong totalDetectMs = new AtomicLong(0);
+    private final AtomicLong totalFramePayloadBytes = new AtomicLong(0);
+    private final AtomicLong totalFramesReturned = new AtomicLong(0);
+    private long metricsLastLoggedAt = 0L;
+
+    // Reusable buffers to reduce allocation churn in hot path.
+    private final int[] rgbValues = new int[INPUT_SIZE * INPUT_SIZE];
+    private final float[][][] outputTransposed = new float[1][32][2100];
 
     // ===== Temporal Tracking (close-proximity misclassification fix) =====
     // Sliding window of recent detection classes and their frame occupancy ratios.
@@ -223,6 +242,15 @@ public class ObjectDetectionPlugin extends Plugin {
             Log.e(TAG, "Model load failed", e);
             call.reject("Failed to load model: " + e.getMessage());
         }
+    }
+
+    @PluginMethod
+    public void setDiagnosticsMode(PluginCall call) {
+        diagnosticsEnabled = Boolean.TRUE.equals(call.getBoolean("enabled", false));
+        JSObject ret = new JSObject();
+        ret.put("success", true);
+        ret.put("diagnosticsEnabled", diagnosticsEnabled);
+        call.resolve(ret);
     }
 
     // ===== Start Day Stream =====
@@ -455,22 +483,20 @@ public class ObjectDetectionPlugin extends Plugin {
         }
 
         Bitmap resized = null;
+        long detectStart = System.currentTimeMillis();
         try {
-            resized = Bitmap.createScaledBitmap(frameToProcess, INPUT_SIZE, INPUT_SIZE, true);
+            resized = letterboxToSquare(frameToProcess);
             ByteBuffer inputBuffer = convertBitmapToByteBuffer(resized);
-
-            float[][][] outputTransposed = new float[1][32][2100];
             long inferenceStart = System.currentTimeMillis();
             tflite.run(inputBuffer, outputTransposed);
             long inferenceMs = System.currentTimeMillis() - inferenceStart;
-            Log.d(TAG, "[Perf] Inference: " + inferenceMs + "ms");
+            totalInferenceMs.addAndGet(inferenceMs);
 
-            Double confidenceParam = call.getDouble("confidence", 0.45);
-            float confidenceThreshold = confidenceParam != null ? confidenceParam.floatValue() : 0.45f;
-            boolean includeFrame = Boolean.TRUE.equals(call.getBoolean("includeFrame", false));
+            Double confidenceParam = call.getDouble("confidence", (double) DEFAULT_CONFIDENCE);
+            float confidenceThreshold = confidenceParam != null ? confidenceParam.floatValue() : DEFAULT_CONFIDENCE;
+            boolean includeFrame = diagnosticsEnabled && Boolean.TRUE.equals(call.getBoolean("includeFrame", false));
 
             List<Detection> detections = postProcessTransposed(outputTransposed[0], confidenceThreshold);
-            Log.d(TAG, "Detections [" + activeCamera + "]: " + detections.size());
 
             Detection nearest = findNearestObject(detections);
 
@@ -499,11 +525,6 @@ public class ObjectDetectionPlugin extends Plugin {
                 // Push into sliding window for future temporal tracking
                 pushClassHistory(nearest.className, bboxRatio);
 
-                Log.d(TAG, String.format(
-                    "[Proximity] class=%s | ratio=%.2f | imminent=%s | override=%s",
-                    nearest.className, bboxRatio, imminent, overrideClass != null ? overrideClass : "none"
-                ));
-
                 JSObject nearestObj = new JSObject();
                 nearestObj.put("class",      nearest.className);
                 nearestObj.put("distance",   distance);
@@ -524,8 +545,11 @@ public class ObjectDetectionPlugin extends Plugin {
                     Bitmap annotated = drawDetections(frameToProcess, detections);
                     ByteArrayOutputStream baos = new ByteArrayOutputStream();
                     annotated.compress(Bitmap.CompressFormat.JPEG, 50, baos);
-                    String base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+                    byte[] jpegBytes = baos.toByteArray();
+                    String base64 = Base64.encodeToString(jpegBytes, Base64.NO_WRAP);
                     ret.put("frame", "data:image/jpeg;base64," + base64);
+                    totalFramePayloadBytes.addAndGet(jpegBytes.length);
+                    totalFramesReturned.incrementAndGet();
                     if (annotated != frameToProcess) annotated.recycle();
                 } catch (Exception encodeErr) {
                     Log.w(TAG, "Frame encode skipped: " + encodeErr.getMessage());
@@ -534,6 +558,7 @@ public class ObjectDetectionPlugin extends Plugin {
 
             ret.put("success", true);
             ret.put("activeCamera", activeCamera);
+            ret.put("metrics", buildMetricsPayload(inferenceMs, System.currentTimeMillis() - detectStart));
             call.resolve(ret);
 
         } catch (Exception e) {
@@ -542,6 +567,10 @@ public class ObjectDetectionPlugin extends Plugin {
         } finally {
             if (resized != null && !resized.isRecycled()) resized.recycle();
             if (frameToProcess != null && !frameToProcess.isRecycled()) frameToProcess.recycle();
+            long detectMs = System.currentTimeMillis() - detectStart;
+            totalDetectMs.addAndGet(detectMs);
+            long calls = detectCalls.incrementAndGet();
+            maybeLogMetrics(calls);
         }
     }
 
@@ -561,6 +590,7 @@ public class ObjectDetectionPlugin extends Plugin {
         final int timeout = call.getInt("timeout", 2000);
 
         new Thread(() -> {
+            AtomicBoolean foundEnough = new AtomicBoolean(false);
             try {
                 // Find all local subnets (hotspot, WiFi, etc.)
                 List<String> subnets = findLocalSubnets();
@@ -574,22 +604,27 @@ public class ObjectDetectionPlugin extends Plugin {
                 List<JSObject> allResults = new ArrayList<>();
 
                 for (String subnet : subnets) {
+                    if (foundEnough.get()) break;
                     Log.d(TAG, "[Scanner] Scanning " + subnet + ".1-254 on port " + port);
 
-                    ExecutorService executor = Executors.newFixedThreadPool(30);
+                    ExecutorService executor = Executors.newFixedThreadPool(SCAN_POOL_SIZE);
                     List<Future<JSObject>> futures = new ArrayList<>();
 
                     for (int i = 1; i <= 254; i++) {
+                        if (foundEnough.get()) break;
                         final String ip = subnet + "." + i;
-                        futures.add(executor.submit(() -> pingHost(ip, port, path, timeout)));
+                        futures.add(executor.submit(() -> pingHost(ip, port, path, timeout, foundEnough)));
                     }
 
                     for (Future<JSObject> future : futures) {
+                        if (foundEnough.get()) break;
                         try {
                             JSObject result = future.get(timeout + 1000, TimeUnit.MILLISECONDS);
                             if (result != null) {
                                 allResults.add(result);
-                                Log.d(TAG, "[Scanner] ✅ Found board: " + result.toString());
+                                if (allResults.size() >= MAX_SCAN_RESULTS) {
+                                    foundEnough.set(true);
+                                }
                             }
                         } catch (Exception e) {
                             // timeout or error — expected for dead IPs
@@ -599,8 +634,9 @@ public class ObjectDetectionPlugin extends Plugin {
                     executor.shutdownNow();
 
                     // Stop scanning remaining subnets if both cameras found
-                    if (allResults.size() >= 2) {
+                    if (allResults.size() >= MAX_SCAN_RESULTS) {
                         Log.d(TAG, "[Scanner] Both cameras found — stopping early.");
+                        foundEnough.set(true);
                         break;
                     }
                 }
@@ -669,9 +705,10 @@ public class ObjectDetectionPlugin extends Plugin {
      * Pings a single host on the given port/path using a raw TCP Socket.
      * Returns a JSObject with the parsed JSON response, or null on failure.
      */
-    private JSObject pingHost(String ip, int port, String path, int timeout) {
+    private JSObject pingHost(String ip, int port, String path, int timeout, AtomicBoolean cancel) {
         Socket socket = null;
         try {
+            if (cancel.get()) return null;
             socket = new Socket();
             socket.connect(new InetSocketAddress(ip, port), timeout);
             socket.setSoTimeout(timeout);
@@ -690,6 +727,7 @@ public class ObjectDetectionPlugin extends Plugin {
             byte[] buffer = new byte[4096];
             int bytesRead;
             while ((bytesRead = in.read(buffer)) != -1) {
+                if (cancel.get()) return null;
                 response.append(new String(buffer, 0, bytesRead));
             }
 
@@ -793,17 +831,17 @@ public class ObjectDetectionPlugin extends Plugin {
     private ByteBuffer convertBitmapToByteBuffer(Bitmap bitmap) {
         ByteBuffer byteBuffer = ByteBuffer.allocateDirect(4 * INPUT_SIZE * INPUT_SIZE * 3);
         byteBuffer.order(ByteOrder.nativeOrder());
-        int[] intValues = new int[INPUT_SIZE * INPUT_SIZE];
-        bitmap.getPixels(intValues, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
+        bitmap.getPixels(rgbValues, 0, bitmap.getWidth(), 0, 0, bitmap.getWidth(), bitmap.getHeight());
         int pixel = 0;
         for (int i = 0; i < INPUT_SIZE; ++i) {
             for (int j = 0; j < INPUT_SIZE; ++j) {
-                final int val = intValues[pixel++];
+                final int val = rgbValues[pixel++];
                 byteBuffer.putFloat(((val >> 16) & 0xFF) / 255.0f);
                 byteBuffer.putFloat(((val >> 8)  & 0xFF) / 255.0f);
                 byteBuffer.putFloat((val & 0xFF)          / 255.0f);
             }
         }
+        byteBuffer.rewind();
         return byteBuffer;
     }
 
@@ -926,11 +964,6 @@ public class ObjectDetectionPlugin extends Plugin {
 
             float threatScore = scaledArea * directionalMultiplier;
 
-            Log.d(TAG, String.format(
-                "[Threat] %s | rawArea=%.0f | scaled=%.0f | dir=%s | score=%.0f",
-                det.className, rawArea, scaledArea, dir, threatScore
-            ));
-
             if (threatScore > maxThreatScore) {
                 maxThreatScore = threatScore;
                 nearest = det;
@@ -1017,6 +1050,41 @@ public class ObjectDetectionPlugin extends Plugin {
         JSObject ret = new JSObject();
         ret.put("success", true);
         call.resolve(ret);
+    }
+
+    private Bitmap letterboxToSquare(Bitmap original) {
+        Bitmap output = Bitmap.createBitmap(INPUT_SIZE, INPUT_SIZE, Bitmap.Config.ARGB_8888);
+        Canvas canvas = new Canvas(output);
+        canvas.drawColor(Color.BLACK);
+
+        float scale = Math.min(INPUT_SIZE / (float) original.getWidth(), INPUT_SIZE / (float) original.getHeight());
+        int scaledW = Math.round(original.getWidth() * scale);
+        int scaledH = Math.round(original.getHeight() * scale);
+        int left = (INPUT_SIZE - scaledW) / 2;
+        int top = (INPUT_SIZE - scaledH) / 2;
+        RectF dst = new RectF(left, top, left + scaledW, top + scaledH);
+        canvas.drawBitmap(original, null, dst, null);
+        return output;
+    }
+
+    private JSObject buildMetricsPayload(long inferenceMs, long detectMs) {
+        JSObject metrics = new JSObject();
+        metrics.put("inferenceMs", inferenceMs);
+        metrics.put("detectMs", detectMs);
+        metrics.put("diagnosticsEnabled", diagnosticsEnabled);
+        return metrics;
+    }
+
+    private void maybeLogMetrics(long calls) {
+        long now = System.currentTimeMillis();
+        if (calls % 20 != 0 && now - metricsLastLoggedAt < 15000) return;
+        metricsLastLoggedAt = now;
+
+        long avgInference = calls == 0 ? 0 : totalInferenceMs.get() / calls;
+        long avgDetect = calls == 0 ? 0 : totalDetectMs.get() / calls;
+        long avgFrameBytes = totalFramesReturned.get() == 0 ? 0 : totalFramePayloadBytes.get() / totalFramesReturned.get();
+        Log.d(TAG, "[Perf] calls=" + calls + " avgInferenceMs=" + avgInference
+                + " avgDetectMs=" + avgDetect + " avgFrameBytes=" + avgFrameBytes);
     }
 
     // ===== Detection Class =====

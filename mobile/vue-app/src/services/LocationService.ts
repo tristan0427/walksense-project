@@ -25,14 +25,17 @@ interface BackgroundLocation {
 class LocationService {
     private watcherId: string | null = null;
     private isTracking = false;
+    private readonly debugLogs = false;
 
     /**
      * Start background location tracking
      */
     async startTracking(): Promise<void> {
-        console.log('Starting location tracking...');
-        console.log('Platform:', Capacitor.getPlatform());
-        console.log('Is Native?', Capacitor.isNativePlatform());
+        if (this.debugLogs) {
+            console.log('Starting location tracking...');
+            console.log('Platform:', Capacitor.getPlatform());
+            console.log('Is Native?', Capacitor.isNativePlatform());
+        }
 
         // For development in browser, use fallback
         if (!Capacitor.isNativePlatform()) {
@@ -57,7 +60,9 @@ class LocationService {
 
             this.isTracking = true;
 
-            console.log('Requesting background location permissions...');
+            if (this.debugLogs) {
+                console.log('Requesting background location permissions...');
+            }
 
 
             //The import has been on Comment state because that will work only on android, uncomment it when  testing on android to work
@@ -85,13 +90,17 @@ class LocationService {
                     }
 
                     if (location) {
-                        console.log('Background location update:', location);
+                        if (this.debugLogs) {
+                            console.log('Background location update:', location);
+                        }
                         await this.sendLocationUpdate(location);
                     }
                 }
             );
 
-            console.log('Background tracking started with ID:', this.watcherId);
+            if (this.debugLogs) {
+                console.log('Background tracking started with ID:', this.watcherId);
+            }
         } catch (error) {
             console.error('Failed to start tracking:', error);
             this.isTracking = false;
@@ -103,12 +112,16 @@ class LocationService {
      * Fallback for browser testing (development only)
      */
     private async startBrowserTracking(): Promise<void> {
-        console.log('Starting browser geolocation (fallback)...');
+        if (this.debugLogs) {
+            console.log('Starting browser geolocation (fallback)...');
+        }
 
         try {
             // Get initial location
             const position = await this.getCurrentLocation();
-            console.log('Initial browser location:', position.coords);
+            if (this.debugLogs) {
+                console.log('Initial browser location:', position.coords);
+            }
 
             // Send initial location
             await this.sendLocationUpdate({
@@ -134,7 +147,9 @@ class LocationService {
                     }
 
                     if (position) {
-                        console.log('Browser location update:', position.coords);
+                        if (this.debugLogs) {
+                            console.log('Browser location update:', position.coords);
+                        }
                         this.sendLocationUpdate({
                             latitude: position.coords.latitude,
                             longitude: position.coords.longitude,
@@ -147,7 +162,9 @@ class LocationService {
                 }
             );
             this.isTracking = true;
-            console.log('Browser tracking started');
+            if (this.debugLogs) {
+                console.log('Browser tracking started');
+            }
 
         } catch (error) {
             console.error('Browser geolocation failed:', error);
@@ -170,7 +187,9 @@ class LocationService {
 
             this.watcherId = null;
             this.isTracking = false;
-            console.log('Tracking stopped');
+            if (this.debugLogs) {
+                console.log('Tracking stopped');
+            }
         } catch (error) {
             console.error('Failed to stop tracking:', error);
         }
@@ -180,14 +199,18 @@ class LocationService {
      * Get current location once
      */
     async getCurrentLocation(): Promise<Position> {
-        console.log('Getting current location...');
+        if (this.debugLogs) {
+            console.log('Getting current location...');
+        }
         try {
             const position = await Geolocation.getCurrentPosition({
                 enableHighAccuracy: true,
                 timeout: 30000,
                 maximumAge: 10000,
             });
-            console.log('Current location (high accuracy):', position.coords);
+            if (this.debugLogs) {
+                console.log('Current location (high accuracy):', position.coords);
+            }
             return position;
         } catch (err) {
             console.warn('High accuracy failed, trying low accuracy...', err);
@@ -196,7 +219,9 @@ class LocationService {
                 timeout: 15000,
                 maximumAge: 30000,
             });
-            console.log('Current location (low accuracy):', position.coords);
+            if (this.debugLogs) {
+                console.log('Current location (low accuracy):', position.coords);
+            }
             return position;
         }
     }
@@ -206,8 +231,10 @@ class LocationService {
      */
     private async sendLocationUpdate(location: BackgroundLocation): Promise<void> {
         try {
-            console.log('Sending location to server...');
-            console.log('API Base URL:', axios.defaults.baseURL);
+            if (this.debugLogs) {
+                console.log('Sending location to server...');
+                console.log('API Base URL:', axios.defaults.baseURL);
+            }
 
             const token = localStorage.getItem('token');
             if (!token) {
@@ -220,10 +247,14 @@ class LocationService {
                 if ('getBattery' in navigator) {
                     const battery = await (navigator as any).getBattery();
                     batteryLevel = Math.round(battery.level * 100);
-                    console.log('Battery level:', batteryLevel);
+                    if (this.debugLogs) {
+                        console.log('Battery level:', batteryLevel);
+                    }
                 }
             } catch (e) {
-                console.log('Battery API not available');
+                if (this.debugLogs) {
+                    console.log('Battery API not available');
+                }
             }
 
             const payload = {
@@ -236,7 +267,9 @@ class LocationService {
                 battery_level: batteryLevel,
             };
 
-            console.log('Payload:', payload);
+            if (this.debugLogs) {
+                console.log('Payload:', payload);
+            }
 
             const endpoint = (axios.defaults.baseURL || '') + '/api/location';
             
@@ -254,7 +287,9 @@ class LocationService {
             });
 
             if (response.status >= 200 && response.status < 300) {
-                console.log('Location sent successfully:', response.data);
+                if (this.debugLogs) {
+                    console.log('Location sent successfully:', response.data);
+                }
             } else {
                 throw new Error(`HTTP ${response.status}: Failed to send location`);
             }

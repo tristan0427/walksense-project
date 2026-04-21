@@ -25,7 +25,6 @@ public class ESP32StreamService {
     private final Context context;
 
     private volatile boolean isStreaming = false;
-    private Bitmap lastBitmap = null;
     private Socket socket;
 
     /**
@@ -169,6 +168,8 @@ public class ESP32StreamService {
                 int frameBufferIndex = 0;
                 boolean inFrame = false;
                 int frameCount = 0;
+                int decodeFailures = 0;
+                long streamStartMs = System.currentTimeMillis();
                 int prevByte = -1;
 
                 while (isStreaming) {
@@ -202,21 +203,22 @@ public class ESP32StreamService {
                             frameBuffer[frameBufferIndex++] = (byte) currentByte;
 
                             if (prevByte == 0xFF && currentByte == 0xD9) {
-                                final byte[] frameData = new byte[frameBufferIndex];
-                                System.arraycopy(frameBuffer, 0, frameData, 0, frameBufferIndex);
-
                                 Bitmap bitmap = BitmapFactory.decodeByteArray(
-                                        frameData, 0, frameData.length
+                                        frameBuffer, 0, frameBufferIndex
                                 );
 
                                 if (bitmap != null) {
                                     frameCount++;
                                     if (callback != null) callback.onFrameReceived(bitmap);
-                                    if (frameCount % 30 == 0) {
-                                        Log.d(TAG, "✓ " + frameCount + " frames from " + resolvedHost);
+                                    if (frameCount % 60 == 0) {
+                                        long elapsedMs = Math.max(1, System.currentTimeMillis() - streamStartMs);
+                                        float fps = (frameCount * 1000f) / elapsedMs;
+                                        Log.d(TAG, "Stream stats [" + resolvedHost + "] frames="
+                                                + frameCount + " decodeFail=" + decodeFailures
+                                                + " fps=" + String.format("%.1f", fps));
                                     }
                                 } else {
-                                    Log.w(TAG, "Failed to decode frame from " + resolvedHost + ", size: " + frameBufferIndex);
+                                    decodeFailures++;
                                 }
 
                                 inFrame = false;

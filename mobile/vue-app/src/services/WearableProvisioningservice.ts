@@ -85,9 +85,12 @@ class WearableProvisioningService {
 
     private isProvisioning = false;
     private onStatus: StatusCallback | null = null;
+    private readonly debugLogs = false;
 
     private emit(state: ProvisioningState) {
-        console.log('[Provisioning]', state.status, '-', state.message);
+        if (this.debugLogs) {
+            console.log('[Provisioning]', state.status, '-', state.message);
+        }
         this.onStatus?.(state);
     }
 
@@ -243,11 +246,17 @@ class WearableProvisioningService {
 
             // Save real IPs from identity responses — reliable for stream/reset connections.
             // Falls back to hostname only if board was never reached (unlikely at this point).
-            const dayBoard   = boards.find(b => b.board === 'day');
-            const nightBoard = boards.find(b => b.board === 'night');
+            const dayBoard: BoardInfo | undefined = boards.find(
+                (b): b is BoardInfo => b.board === 'day'
+            );
+            const nightBoard: BoardInfo | undefined = boards.find(
+                (b): b is BoardInfo => b.board === 'night'
+            );
 
-            if (dayBoard)   localStorage.setItem('dayCamIp',   dayBoard.ip);
-            if (nightBoard) localStorage.setItem('nightCamIp', nightBoard.ip);
+            const dayIp = dayBoard?.ip;
+            const nightIp = nightBoard?.ip;
+            if (dayIp) localStorage.setItem('dayCamIp', dayIp);
+            if (nightIp) localStorage.setItem('nightCamIp', nightIp);
 
             this.emit({
                 status:     'done',
@@ -323,6 +332,8 @@ class WearableProvisioningService {
 
         let dayBoard: BoardInfo | null = null;
         let nightBoard: BoardInfo | null = null;
+        let dayIpFound: string | null = null;
+        let nightIpFound: string | null = null;
 
         const scanOnce = async (): Promise<void> => {
             try {
@@ -335,10 +346,12 @@ class WearableProvisioningService {
                     for (const b of result.boards) {
                         if (!dayBoard && b.board === 'day' && b.ip) {
                             dayBoard = { board: 'day', ip: b.ip, ble_name: b.ble_name || '' };
+                            dayIpFound = b.ip;
                             this.emit({ status: 'scanning_subnet', message: `✅ Day camera found at ${b.ip}` });
                         }
                         if (!nightBoard && b.board === 'night' && b.ip) {
                             nightBoard = { board: 'night', ip: b.ip, ble_name: b.ble_name || '' };
+                            nightIpFound = b.ip;
                             this.emit({ status: 'scanning_subnet', message: `✅ Night camera found at ${b.ip}` });
                         }
                     }
@@ -357,8 +370,9 @@ class WearableProvisioningService {
             await scanOnce();
         }
 
-        if (dayBoard)   localStorage.setItem('dayCamIp',   dayBoard.ip);
-        if (nightBoard) localStorage.setItem('nightCamIp', nightBoard.ip);
+
+        if (dayIpFound) localStorage.setItem('dayCamIp', dayIpFound);
+        if (nightIpFound) localStorage.setItem('nightCamIp', nightIpFound);
 
         const count = [dayBoard, nightBoard].filter(Boolean).length;
         this.emit({
@@ -461,14 +475,16 @@ class WearableProvisioningService {
             const services = await BleClient.getServices(deviceId);
             let targetServiceUUID = PROV_SERVICE_UUID;
 
-            console.log('[Provisioning] --- DISCOVERED BLE SERVICES ---');
-            for (const service of services) {
-                console.log(`[Provisioning] Service: ${service.uuid}`);
-                for (const char of service.characteristics) {
-                    console.log(`[Provisioning]   -> Characteristic: ${char.uuid}`);
+            if (this.debugLogs) {
+                console.log('[Provisioning] --- DISCOVERED BLE SERVICES ---');
+                for (const service of services) {
+                    console.log(`[Provisioning] Service: ${service.uuid}`);
+                    for (const char of service.characteristics) {
+                        console.log(`[Provisioning]   -> Characteristic: ${char.uuid}`);
+                    }
                 }
+                console.log('[Provisioning] --------------------------------');
             }
-            console.log('[Provisioning] --------------------------------');
 
             for (const service of services) {
                 const hasConfigChar = service.characteristics.some(c => {
@@ -715,15 +731,27 @@ class WearableProvisioningService {
         // Race both strategies — first non-null result wins
         return new Promise(async (resolve) => {
             let resolved = false;
+            let cancelled = false;
             const finish = (result: BoardInfo | null) => {
                 if (!resolved) {
                     resolved = true;
+                    cancelled = true;
                     resolve(result);
                 }
             };
 
-            mdnsPoll().then(finish);
-            nativeScan().then(finish);
+            const guardedMdnsPoll = async () => {
+                const found = await mdnsPoll();
+                if (!cancelled) finish(found);
+            };
+
+            const guardedNativeScan = async () => {
+                const found = await nativeScan();
+                if (!cancelled) finish(found);
+            };
+
+            guardedMdnsPoll();
+            guardedNativeScan();
 
             // Ensure we resolve null at deadline even if both strategies are still running
             this.delay(timeoutMs).then(() => finish(null));
