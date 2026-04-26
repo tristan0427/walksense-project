@@ -28,29 +28,30 @@ const nightCamConnected = ref(false);
 const dayCamStatus      = ref('Not Connected');
 const nightCamStatus    = ref('Not Connected');
 
-// Camera IPs — stored in localStorage after first setup, editable in settings
 const dayCamIp   = ref(localStorage.getItem('dayCamIp')   || '');
 const nightCamIp = ref(localStorage.getItem('nightCamIp') || '');
 
-// Active camera — driven by BH1750 lux reading from ESP32
-// The ESP32 reports a lux value; Vue decides which cam to use
-const activeCamera  = ref('day');       // 'day' | 'night'
-const currentLux    = ref(null);        // latest raw lux from BH1750
-const averageLux    = ref(null);        // rolling average for display
+const activeCamera  = ref('day');
+const currentLux    = ref(null);
+const averageLux    = ref(null);
 
 // ── Lux Hysteresis Config ─────────────────────────────────────────
-// Enter night mode: rolling average drops below NIGHT_ENTER for SUSTAINED_MS
-// Exit  night mode: rolling average rises above NIGHT_EXIT  for SUSTAINED_MS
-const NIGHT_ENTER    = 5;               // lux threshold to enter night mode
-const NIGHT_EXIT     = 15;              // lux threshold to exit night mode
-const LUX_BUFFER_SIZE = 10;             // number of readings to average (~5 sec at 500ms)
-const SUSTAINED_MS   = 3000;            // must sustain for 3 seconds before switching
+const NIGHT_ENTER    = 5;
+const NIGHT_EXIT     = 15;
+const LUX_BUFFER_SIZE = 10;
+const SUSTAINED_MS   = 3000;
 
-// Rolling average state
-const luxBuffer      = [];              // circular buffer for lux readings
-let sustainedSince   = null;            // timestamp when threshold was first met
-let sustainedTarget  = null;            // 'night' or 'day' — which mode we're trending toward
-const showIpSetup = ref(false);  // ← never auto-show
+const luxBuffer      = [];
+let sustainedSince   = null;
+let sustainedTarget  = null;
+const showIpSetup = ref(false);
+
+// ── Camera Fault Tolerance ────────────────────────────────────────────────────
+const OFFLINE_FAILURE_THRESHOLD = 5;
+let dayPollFailures   = 0;
+let nightPollFailures = 0;
+let dayReconnectTimeout   = null;
+let nightReconnectTimeout = null;
 
 const isSendingDistress = ref(false);
 const distressSent = ref(false);
@@ -60,28 +61,35 @@ const nearestObject     = ref(null);
 const detectionInterval = ref(null);
 const lastSpokenTime    = ref(0);
 const isSpeaking        = ref(false);
-const runtimeMode       = ref('navigation_mode'); // navigation_mode | diagnostic_mode
-const cameraFrame       = ref(null);  // base64 data URI from detection
+const currentSpokenClass = ref(null);
+
+// NOTE: runtimeMode and cameraFrame have been removed.
+// Base64 frame encoding is permanently disabled in the native plugin.
+// The Camera Preview block has been removed from the template.
+// Use Android Studio Logcat for debugging — filter by tag "ObjectDetection"
+// to see [Perf] metrics and detection output on every 20th call.
+
 const perfMetrics = ref({
   detectCalls: 0,
   avgDetectMs: 0,
   avgInferenceMs: 0,
 });
-let previewFrameCounter = 0;
 
-const TIER_1_CLASSES = new Set(['pothole', 'glass wall', 'stairs']);
-const TIER_2_CLASSES = new Set(['car', 'tricycle', 'motorcycle', 'truck', 'bus', 'person', 'group of people']);
+const TIER_1_CLASSES = new Set(['pothole', 'glass wall', 'stairs', 'puddle']);
+const TIER_2_CLASSES = new Set(['car', 'tricycle', 'motorcycle', 'truck', 'bus', 'person', 'group of people', 'dog']);
 const TIER_3_CLASSES = new Set([
   'pole', 'tree', 'bench', 'trash can', 'fence', 'standing aircon', 'bollards',
   'chair', 'table', 'couch', 'cabinet', 'refrigerator', 'stall'
 ]);
 const TIER_4_CLASSES = new Set(['gate', 'door', 'window', 'wall']);
 
+const IMMINENT_COOLDOWN_MS = 3500;
+
 const TIER_COOLDOWN_MS = {
-  tier1: 0,
+  tier1: 3000,
   tier2: 1800,
-  tier3: 6000,
-  tier4: 9000,
+  tier3: 4000,
+  tier4: 5000,
 };
 
 const lastSpokenByClass = new Map();
@@ -94,13 +102,11 @@ const ipSaveError = ref('');
 const saveIps = async () => {
   const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
 
-  // Day camera is required
   if (!ipRegex.test(ipFormDay.value.trim())) {
     ipSaveError.value = 'Please enter a valid Day Camera IP (e.g. 192.168.43.101)';
     return;
   }
 
-  // Night camera is optional — only validate if something was entered
   if (ipFormNight.value.trim() && !ipRegex.test(ipFormNight.value.trim())) {
     ipSaveError.value = 'Night Camera IP is invalid (e.g. 192.168.43.102)';
     return;
@@ -114,7 +120,7 @@ const saveIps = async () => {
   if (nightCamIp.value) {
     localStorage.setItem('nightCamIp', nightCamIp.value);
   } else {
-    localStorage.removeItem('nightCamIp');  // clear it if left blank
+    localStorage.removeItem('nightCamIp');
   }
 
   showIpSetup.value = false;
@@ -125,57 +131,51 @@ const saveIps = async () => {
 onMounted(async () => {
   console.log('PWD Dashboard mounted');
 
-  // Day camera events
   ObjectDetection.addListener('dayCamConnected', () => {
     dayCamConnected.value = true;
     dayCamStatus.value    = 'Connected';
+    dayPollFailures = 0;
     console.log('✓ Day cam connected');
     maybeStartDetection();
   });
   ObjectDetection.addListener('dayCamError', (data) => {
-    dayCamConnected.value = false;
-    dayCamStatus.value    = 'Offline';
-    console.error('Day cam error:', data.error);
+    console.warn('Day cam stream error (will retry):', data.error);
+    attemptDayCamReconnect();
   });
 
-  // Night camera events
   ObjectDetection.addListener('nightCamConnected', () => {
     nightCamConnected.value = true;
     nightCamStatus.value    = 'Connected';
+    nightPollFailures = 0;
     console.log('✓ Night cam connected');
     maybeStartDetection();
   });
   ObjectDetection.addListener('nightCamError', (data) => {
-    nightCamConnected.value = false;
-    nightCamStatus.value    = 'Offline';
-    console.error('Night cam error:', data.error);
+    console.warn('Night cam stream error (will retry):', data.error);
+    attemptNightCamReconnect();
   });
 
-  // Load model
+  // Load model — diagnostics mode is permanently disabled
   try {
     await ObjectDetection.loadModel();
-    await ObjectDetection.setDiagnosticsMode({ enabled: runtimeMode.value === 'diagnostic_mode' });
     console.log('✓ Model loaded');
   } catch (err) {
     console.error('Model load failed:', err);
   }
 
-  // Load user/guardian
   const userStr = localStorage.getItem('user');
   if (userStr) user.value = JSON.parse(userStr);
 
   const guardianStr = localStorage.getItem('guardian');
   if (guardianStr) guardian.value = JSON.parse(guardianStr);
 
-  // Connect cameras if IPs saved, otherwise auto-discover on hotspot
   if (dayCamIp.value || nightCamIp.value) {
     await connectBothCameras();
   } else {
     await autoDiscoverCameras();
   }
-  
+
   if (dayCamIp.value) {
-    // Only start polling if day camera (with BH1750 sensor) exists
     startLuxPolling();
   }
 
@@ -183,7 +183,6 @@ onMounted(async () => {
     startEmergencyPolling();
   }
 
-  // Start GPS tracking
   await startTracking();
 });
 
@@ -191,6 +190,8 @@ onUnmounted(async () => {
   stopDetection();
   stopLuxPolling();
   stopEmergencyPolling();
+  if (dayReconnectTimeout)   clearTimeout(dayReconnectTimeout);
+  if (nightReconnectTimeout) clearTimeout(nightReconnectTimeout);
   await ObjectDetection.stopESP32Stream();
   await ObjectDetection.removeAllListeners();
 });
@@ -207,7 +208,7 @@ const connectBothCameras = async () => {
     }
   }
 
-  if (nightCamIp.value) {   // ← only starts if IP exists
+  if (nightCamIp.value) {
     try {
       await ObjectDetection.startNightStream({ ip: nightCamIp.value });
     } catch (err) {
@@ -217,7 +218,6 @@ const connectBothCameras = async () => {
   }
 };
 
-// Auto-discover cameras when no IPs saved (fresh install / reinstall)
 const autoDiscoverCameras = async () => {
   try {
     console.log('[AutoDiscovery] No saved IPs — scanning hotspot...');
@@ -254,32 +254,35 @@ let luxInterval = null;
 
 const startLuxPolling = () => {
   if (luxInterval) return;
-  
-  // Need to poll the day board specifically, since it hosts the BH1750
-  if (!dayCamIp.value) return; 
+  if (!dayCamIp.value) return;
 
   luxInterval = setInterval(async () => {
     try {
-      // Use native CapacitorHttp to bypass Mixed Content policies on Android
       const response = await CapacitorHttp.get({
         url: `http://${dayCamIp.value}:82/lux`,
         connectTimeout: 2000,
         readTimeout: 2000
       });
-      
+
       let data = response.data;
       if (typeof data === 'string' && data.length > 0) {
         try { data = JSON.parse(data); } catch { /* ignore */ }
       }
-      
+
       if (data && typeof data.lux === 'number') {
+        dayPollFailures = 0;
         onLuxReceived(data.lux);
       }
     } catch (err) {
-      dayCamConnected.value = false;
-      dayCamStatus.value = 'Offline';
+      dayPollFailures++;
+      if (dayPollFailures >= OFFLINE_FAILURE_THRESHOLD) {
+        dayCamConnected.value = false;
+        dayCamStatus.value    = 'Offline';
+        dayPollFailures = 0;
+        attemptDayCamReconnect();
+      }
     }
-  }, 500);   // poll every 500ms for smooth rolling average
+  }, 500);
 };
 
 const stopLuxPolling = () => {
@@ -289,42 +292,33 @@ const stopLuxPolling = () => {
   }
 };
 
-// Called every 500ms with a fresh lux reading from the ESP32.
-// Uses rolling average + hysteresis + sustained duration to prevent
-// false night-mode triggers from body shadows covering the BH1750.
 const onLuxReceived = async (lux) => {
   currentLux.value = lux;
 
-  // ── 1. Update rolling average buffer ────────────────────────────
   luxBuffer.push(lux);
   if (luxBuffer.length > LUX_BUFFER_SIZE) luxBuffer.shift();
 
-  // Need at least 3 readings before making decisions
   if (luxBuffer.length < 3) return;
 
   const avg = luxBuffer.reduce((sum, v) => sum + v, 0) / luxBuffer.length;
   averageLux.value = Math.round(avg * 10) / 10;
 
-  // ── 2. Determine target mode based on hysteresis ────────────────
   let targetMode = null;
 
   if (activeCamera.value === 'day' && avg < NIGHT_ENTER) {
-    targetMode = 'night';  // avg below 5 → wants to enter night
+    targetMode = 'night';
   } else if (activeCamera.value === 'night' && avg > NIGHT_EXIT) {
-    targetMode = 'day';    // avg above 15 → wants to exit night
+    targetMode = 'day';
   }
 
-  // ── 3. Sustained duration check ─────────────────────────────────
   if (targetMode) {
     if (sustainedTarget !== targetMode) {
-      // New trend direction — start the timer
       sustainedTarget = targetMode;
       sustainedSince  = Date.now();
     }
 
     const elapsed = Date.now() - sustainedSince;
     if (elapsed >= SUSTAINED_MS) {
-      // Sustained long enough — switch!
       activeCamera.value = targetMode;
       console.log(`💡 Avg lux ${avg.toFixed(1)} sustained ${(elapsed/1000).toFixed(1)}s → switching to ${targetMode} camera`);
       sustainedTarget = null;
@@ -338,7 +332,6 @@ const onLuxReceived = async (lux) => {
       }
     }
   } else {
-    // Not meeting any threshold — reset sustained timer
     sustainedTarget = null;
     sustainedSince  = null;
   }
@@ -359,18 +352,24 @@ const startEmergencyPolling = () => {
         connectTimeout: 2000,
         readTimeout: 2000
       });
-      
+
       let data = response.data;
       if (typeof data === 'string' && data.length > 0) {
         try { data = JSON.parse(data); } catch { /* ignore */ }
       }
-      
+
       if (data && data.pressed === true) {
         sendDistressSignal('hardware_button');
       }
+      nightPollFailures = 0;
     } catch (err) {
-      nightCamConnected.value = false;
-      nightCamStatus.value = 'Offline';
+      nightPollFailures++;
+      if (nightPollFailures >= OFFLINE_FAILURE_THRESHOLD) {
+        nightCamConnected.value = false;
+        nightCamStatus.value    = 'Offline';
+        nightPollFailures = 0;
+        attemptNightCamReconnect();
+      }
     }
   }, 2000);
 };
@@ -382,17 +381,48 @@ const stopEmergencyPolling = () => {
   }
 };
 
+// ── Silent Reconnect Helpers ────────────────────────────────────────────────
+
+const attemptDayCamReconnect = () => {
+  if (dayReconnectTimeout) return;
+  dayReconnectTimeout = setTimeout(async () => {
+    dayReconnectTimeout = null;
+    if (!dayCamIp.value) return;
+    try {
+      await ObjectDetection.startDayStream({ ip: dayCamIp.value });
+    } catch (err) {
+      console.warn('Day cam reconnect failed:', err.message);
+      dayCamConnected.value = false;
+      dayCamStatus.value    = 'Offline';
+    }
+  }, 5000);
+};
+
+const attemptNightCamReconnect = () => {
+  if (nightReconnectTimeout) return;
+  nightReconnectTimeout = setTimeout(async () => {
+    nightReconnectTimeout = null;
+    if (!nightCamIp.value) return;
+    try {
+      await ObjectDetection.startNightStream({ ip: nightCamIp.value });
+    } catch (err) {
+      console.warn('Night cam reconnect failed:', err.message);
+      nightCamConnected.value = false;
+      nightCamStatus.value    = 'Offline';
+    }
+  }, 5000);
+};
+
 const sendDistressSignal = async (source = 'app_button') => {
   if (isSendingDistress.value) return;
-  
+
   isSendingDistress.value = true;
   console.log(`Sending distress signal from ${source}...`);
-  
+
   try {
     let lat = null;
     let lng = null;
-    
-    // Try to get freshest coordinates
+
     try {
       const position = await LocationService.getCurrentLocation();
       lat = position.coords.latitude;
@@ -411,13 +441,11 @@ const sendDistressSignal = async (source = 'app_button') => {
       longitude: lng
     });
 
-    // Show flash message
     distressSent.value = true;
     setTimeout(() => {
       distressSent.value = false;
     }, 4000);
-    
-    // Voice prompt
+
     try {
       await TextToSpeech.speak({
         text: 'Emergency distress signal sent to your guardian.',
@@ -435,18 +463,8 @@ const sendDistressSignal = async (source = 'app_button') => {
 
 // ── Detection ────────────────────────────────────────────────────────────────
 
-// Only start detection loop once at least the active camera has a frame
-// const maybeStartDetection = () => {
-//   if (detectionInterval.value) return; // already running
-//   const activeCamReady = activeCamera.value === 'day'
-//       ? dayCamConnected.value
-//       : nightCamConnected.value;
-//   if (activeCamReady) startDetection();
-//   if (dayCamConnected.value) startDetection();
-// };
-
 const maybeStartDetection = () => {
-  if (detectionInterval.value) return; // already running
+  if (detectionInterval.value) return;
   if (dayCamConnected.value || nightCamConnected.value) startDetection();
 };
 
@@ -454,12 +472,10 @@ const startDetection = () => {
   console.log('Starting detection loop');
   detectionInterval.value = setInterval(async () => {
     try {
-      previewFrameCounter += 1;
-      const includeFrame = runtimeMode.value === 'diagnostic_mode' && previewFrameCounter % 2 === 0;
-      const result = await ObjectDetection.detectFromStream({ confidence: 0.38, includeFrame });
+      // NOTE: includeFrame is permanently removed.
+      // Passing it would have no effect — the native plugin ignores it.
+      const result = await ObjectDetection.detectFromStream({ confidence: 0.45 });
 
-      // Store camera frame for live preview
-      cameraFrame.value = result.frame || null;
       updatePerfMetrics(result.metrics);
       const now = Date.now();
 
@@ -470,8 +486,10 @@ const startDetection = () => {
         const isImminent = distance === 'imminent';
         const tier = getClassTier(objClass);
         const canSpeak = canSpeakClass(tier, objClass, now);
-
-        const shouldHandleTTS = isImminent ? true : canSpeak;
+        
+        const lastClassSpokenAt = lastSpokenByClass.get(objClass) || 0;
+        const imminentCanSpeak = (now - lastClassSpokenAt) >= IMMINENT_COOLDOWN_MS;
+        const shouldHandleTTS = isImminent ? imminentCanSpeak : canSpeak;
 
         if (shouldHandleTTS) {
           const shouldSpeak = shouldSpeakAlert(tier, direction, distance, isImminent);
@@ -481,28 +499,29 @@ const startDetection = () => {
             let ttsRate;
 
             if (isImminent) {
-              // Urgent phrasing: "Warning! Car directly ahead, stop!"
               const locationPhrase = direction === 'ahead'
-                ? 'directly ahead'
-                : `on your ${direction}`;
+                  ? 'directly ahead'
+                  : `on your ${direction}`;
               msg = `Warning! ${objClass} ${locationPhrase}, stop!`;
               ttsRate = 1.2;
             } else {
-              // Normal phrasing: "Car close ahead" / "Wall very close on your left"
               const locationPhrase = direction === 'ahead'
-                ? 'ahead'
-                : `on your ${direction}`;
+                  ? 'ahead'
+                  : `on your ${direction}`;
               msg = `${objClass} ${distance} ${locationPhrase}`;
               ttsRate = 0.9;
             }
 
-            if (tier === 'tier1') {
-              try { await TextToSpeech.stop(); } catch (e) {}
-            } else if (isSpeaking.value) {
-              return;
+            if (isSpeaking.value) {
+              if (tier === 'tier1' && currentSpokenClass.value !== objClass) {
+                try { await TextToSpeech.stop(); } catch (e) {}
+              } else {
+                return;
+              }
             }
 
             isSpeaking.value = true;
+            currentSpokenClass.value = objClass;
             try {
               await TextToSpeech.speak({
                 text: msg,
@@ -517,6 +536,7 @@ const startDetection = () => {
               console.error('TTS error:', ttsError);
             } finally {
               isSpeaking.value = false;
+              currentSpokenClass.value = null;
             }
           }
         }
@@ -525,11 +545,11 @@ const startDetection = () => {
       }
 
     } catch (err) {
-      // Suppress "no frame available" during camera warm-up
       if (!err.message?.includes('No valid')) {
         console.error('Detection error:', err);
       }
       isSpeaking.value = false;
+      currentSpokenClass.value = null;
     }
   }, 1000);
 };
@@ -554,7 +574,8 @@ const canSpeakClass = (tier, className, now) => {
 };
 
 const shouldSpeakAlert = (tier, direction, distance, isImminent) => {
-  if (isImminent || tier === 'tier1') return true;
+  if (isImminent) return true;
+  if (tier === 'tier1') return distance !== 'far';
   if (tier === 'tier2') return direction === 'ahead' || distance === 'very close';
   if (tier === 'tier3') return direction === 'ahead' && distance !== 'far';
   return direction === 'ahead' && (distance === 'close' || distance === 'very close');
@@ -565,10 +586,10 @@ const updatePerfMetrics = (metrics) => {
   perfMetrics.value.detectCalls += 1;
   const n = perfMetrics.value.detectCalls;
   perfMetrics.value.avgDetectMs = Math.round(
-    ((perfMetrics.value.avgDetectMs * (n - 1)) + (metrics.detectMs || 0)) / n
+      ((perfMetrics.value.avgDetectMs * (n - 1)) + (metrics.detectMs || 0)) / n
   );
   perfMetrics.value.avgInferenceMs = Math.round(
-    ((perfMetrics.value.avgInferenceMs * (n - 1)) + (metrics.inferenceMs || 0)) / n
+      ((perfMetrics.value.avgInferenceMs * (n - 1)) + (metrics.inferenceMs || 0)) / n
   );
 };
 
@@ -695,7 +716,7 @@ const goToWearableSetup = () => {
     <!-- Main Content -->
     <div class="p-4 space-y-4">
 
-      <!-- Greeting + Online Status (merged) -->
+      <!-- Greeting + Online Status -->
       <div class="bg-yellow-100 rounded-2xl shadow ring-1 ring-yellow-200/60 p-4 flex items-center gap-3">
         <div class="w-10 h-10 bg-yellow-400 rounded-full flex items-center justify-center font-bold text-gray-800 text-lg shrink-0">
           {{ (user?.name || 'U').charAt(0).toUpperCase() }}
@@ -803,7 +824,6 @@ const goToWearableSetup = () => {
           </span>
         </div>
 
-        <!-- Divider -->
         <div class="border-t border-gray-100"></div>
 
         <!-- Night camera -->
@@ -836,14 +856,9 @@ const goToWearableSetup = () => {
         </button>
       </div>
 
-      <!-- Camera Preview -->
-      <div v-if="cameraFrame" class="bg-white rounded-2xl shadow ring-1 ring-gray-100 p-4">
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="text-sm font-bold tracking-tight text-gray-800">Camera Preview</h2>
-          <span class="text-[10px] font-medium tracking-wide uppercase text-gray-400">{{ activeCamera }} cam</span>
-        </div>
-        <img :src="cameraFrame" alt="Camera feed" class="w-full rounded-xl bg-gray-200" />
-      </div>
+      <!-- NOTE: Camera Preview block removed.
+           Base64 frame encoding is permanently disabled. Use Android Studio
+           Logcat (filter: ObjectDetection) to debug detection output. -->
 
       <!-- Detection (Alert Banner) -->
       <div class="bg-white rounded-2xl shadow ring-1 ring-gray-100 p-4 transition-shadow hover:shadow-md">
@@ -852,7 +867,6 @@ const goToWearableSetup = () => {
           <span class="text-[10px] font-medium tracking-wide uppercase text-gray-400">via {{ nearestObject?.camera || activeCamera }} cam</span>
         </div>
 
-        <!-- Detected: imminent = red pulsing, normal = orange -->
         <div v-if="nearestObject" :class="[
           'border-l-4 rounded-r-xl p-3',
           nearestObject.distance === 'imminent'
@@ -880,12 +894,30 @@ const goToWearableSetup = () => {
           </div>
         </div>
 
-        <!-- Clear -->
         <div v-else class="flex items-center justify-center gap-2 py-5 text-green-600">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
           <p class="text-sm font-semibold">Path clear</p>
+        </div>
+      </div>
+
+      <!-- Performance Metrics (lightweight text-only, always visible) -->
+      <div class="bg-white rounded-2xl shadow ring-1 ring-gray-100 p-4">
+        <h2 class="text-sm font-bold tracking-tight text-gray-800 mb-3">Detection Performance</h2>
+        <div class="grid grid-cols-3 gap-3 text-center">
+          <div class="bg-gray-50 rounded-xl p-2">
+            <p class="text-[10px] font-medium tracking-wide uppercase text-gray-400 mb-1">Calls</p>
+            <p class="text-lg font-black text-gray-800">{{ perfMetrics.detectCalls }}</p>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-2">
+            <p class="text-[10px] font-medium tracking-wide uppercase text-gray-400 mb-1">Inference</p>
+            <p class="text-lg font-black text-gray-800">{{ perfMetrics.avgInferenceMs }}<span class="text-xs font-medium text-gray-500">ms</span></p>
+          </div>
+          <div class="bg-gray-50 rounded-xl p-2">
+            <p class="text-[10px] font-medium tracking-wide uppercase text-gray-400 mb-1">Total</p>
+            <p class="text-lg font-black text-gray-800">{{ perfMetrics.avgDetectMs }}<span class="text-xs font-medium text-gray-500">ms</span></p>
+          </div>
         </div>
       </div>
 
@@ -935,12 +967,12 @@ const goToWearableSetup = () => {
         </div>
       </div>
 
-      <!-- TEMPORARY DISTRESS BUTTON -->
+      <!-- Distress Button -->
       <div class="mt-4 mb-2">
         <button
-          @click="sendDistressSignal('app_button')"
-          :disabled="isSendingDistress"
-          class="w-full py-4 rounded-2xl shadow-lg border-2 border-red-600 bg-red-500 hover:bg-red-600 text-white font-bold text-lg flex items-center justify-center gap-3 transition-colors active:scale-95"
+            @click="sendDistressSignal('app_button')"
+            :disabled="isSendingDistress"
+            class="w-full py-4 rounded-2xl shadow-lg border-2 border-red-600 bg-red-500 hover:bg-red-600 text-white font-bold text-lg flex items-center justify-center gap-3 transition-colors active:scale-95"
         >
           <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" v-if="!isSendingDistress">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>

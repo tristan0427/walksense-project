@@ -5,7 +5,8 @@ import Guardian_dashboard from "../pages/Guardian_dashboard.vue";
 import PwdDashboard from '../pages/PWD_dashboard.vue';
 import Wearablesetup from "@/pages/Wearablesetup.vue";
 import Register from "../pages/Register.vue";
-import OTP from "../pages/OTP.vue"
+import OTP from "../pages/OTP.vue";
+import ForgotPassword from "../pages/ForgotPassword.vue";
 
 const routes = [
     {
@@ -30,6 +31,12 @@ const routes = [
       path: '/otp',
       name: 'OTP',
       component: OTP
+    },
+
+    {
+      path: '/forgot-password',
+      name: 'ForgotPassword',
+      component: ForgotPassword
     },
 
     {

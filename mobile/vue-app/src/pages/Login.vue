@@ -164,13 +164,20 @@ const handleLogin = async () => {
         </button>
       </form>
 
-      <!-- Register -->
-      <p class="mt-8 text-sm">
-        Don't have an account yet?
-        <router-link to="/register" class="text-gray-900 underline font-bold hover:no-underline">
-          Register here
-        </router-link>
-      </p>
+      <!-- Links -->
+      <div class="mt-8 text-center space-y-3">
+        <p class="text-sm">
+          <router-link to="/forgot-password" class="text-gray-800 underline font-semibold hover:no-underline">
+            Forgot Password?
+          </router-link>
+        </p>
+        <p class="text-sm">
+          Don't have an account yet?
+          <router-link to="/register" class="text-gray-900 underline font-bold hover:no-underline">
+            Register here
+          </router-link>
+        </p>
+      </div>
     </div>
   </div>
 </template>

@@ -18,6 +18,7 @@ const loading = ref(true)
 const error = ref('')
 const updateInterval = ref(null)
 const showLogoutConfirm = ref(false)
+const guardianProfile = ref(null)
 
 axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL
 const token = localStorage.getItem('token')
@@ -26,6 +27,11 @@ if (token) {
 }
 
 onMounted(async () => {
+  const userStr = localStorage.getItem('user')
+  if (userStr) {
+    guardianProfile.value = JSON.parse(userStr)
+  }
+
   await initializeMap()
   await loadPwdLocations()
   await loadNotifications()
@@ -248,9 +254,6 @@ const confirmLogout = () => {
   showLogoutConfirm.value = false
   router.push('/')
 }
-const goAccount = () => {
-  router.push('/account')
-}
 
 const refreshLocations = () => {
   loading.value = true
@@ -285,11 +288,30 @@ const refreshLocations = () => {
     </header>
 
     <!-- Slide Menu -->
-    <div v-if="menuOpen" class="absolute right-4 mt-2 w-44 bg-white rounded-xl shadow-lg ring-1 ring-black/5 z-50 overflow-hidden transition-all duration-150">
-      <button @click="goAccount" class="block w-full text-left px-4 py-3 hover:bg-gray-50 text-sm font-medium text-gray-700">
-        Account
-      </button>
-      <button @click="logout" class="block w-full text-left px-4 py-3 text-red-600 font-semibold hover:bg-red-50 text-sm">
+    <div v-if="menuOpen" class="absolute right-4 mt-2 w-64 bg-white rounded-xl shadow-lg ring-1 ring-black/5 z-50 overflow-hidden transition-all duration-150">
+      
+      <!-- Account Details Section -->
+      <div class="px-4 py-4 border-b border-gray-100 bg-gray-50/50">
+        <div class="flex items-center gap-3 mb-3">
+          <div class="w-10 h-10 rounded-full bg-yellow-200 text-yellow-700 flex items-center justify-center font-bold text-lg shrink-0">
+            {{ guardianProfile?.name?.charAt(0)?.toUpperCase() || 'G' }}
+          </div>
+          <div class="overflow-hidden">
+            <p class="text-sm font-bold text-gray-800 truncate">{{ guardianProfile?.name || 'Guardian Profile' }}</p>
+            <p class="text-xs text-gray-500 truncate">{{ guardianProfile?.email || '' }}</p>
+          </div>
+        </div>
+
+        <div class="mt-3 pt-3 border-t border-gray-100">
+          <p class="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">Monitoring</p>
+          <p class="text-sm font-medium text-gray-700 truncate">
+            {{ pwdLocations.length > 0 ? pwdLocations[0].pwd_name : 'No PWD assigned' }}
+          </p>
+        </div>
+      </div>
+
+      <button @click="logout" class="block w-full text-left px-4 py-3 text-red-600 font-semibold hover:bg-red-50 text-sm flex items-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
         Logout
       </button>
     </div>
