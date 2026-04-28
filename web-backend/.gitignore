@@ -4,6 +4,7 @@
 /public/build
 /public/hot
 /public/storage
+!/public/storage/Walksense.apk
 /storage/*.key
 /storage/pail
 /resources/js/actions

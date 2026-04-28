@@ -8,17 +8,17 @@ const mobileMenuOpen = ref(false)
 const features = [
   {
     title: 'Real-Time GPS Tracking',
-    description: 'Guardian monitors PWD location on a live map with battery status and accuracy indicators. Location updates every 20 seconds.',
+    description: 'Guardian monitors PWD location on a live map with battery status and accuracy indicators. Dashboard refreshes every 10 seconds.',
     icon: 'gps',
   },
   {
     title: 'AI Object Detection',
-    description: 'Dual ESP32-CAM wearable detects obstacles using YOLO and announces them via text-to-speech for safe navigation.',
+    description: 'ESP32-CAM wearable streams video to your phone, where a YOLOv8 AI model detects 30 types of obstacles and announces them via text-to-speech.',
     icon: 'detection',
   },
   {
     title: 'Emergency Distress Signal',
-    description: 'Physical push button on the wearable sends an immediate emergency alert with GPS coordinates to the guardian.',
+    description: 'Physical button on the wearable triggers an emergency alert with GPS coordinates sent to the guardian.',
     icon: 'emergency',
   },
   {
@@ -37,7 +37,7 @@ const steps = [
   {
     number: '02',
     title: 'Connect the Wearable',
-    description: 'Pair the ESP32-CAM wearable device via WiFi. The device handles object detection and distress signals.',
+    description: 'Set up the wearable cameras via Bluetooth. They connect to your phone\'s hotspot and stream video for AI-powered obstacle detection.',
   },
   {
     number: '03',
@@ -191,17 +191,18 @@ const scrollTo = (id: string) => {
         <div class="flex-1">
           <h2 class="text-3xl md:text-4xl font-extrabold tracking-tight text-[#f7d686] mb-6">The Wearable Device</h2>
           <p class="text-gray-300 leading-relaxed mb-6">
-            A lightweight, wearable unit powered by dual ESP32-CAM modules. It connects to the WalkSense app
-            via WiFi and provides real-time obstacle detection using a YOLO-based model. Detected objects are
+            A lightweight, wearable unit powered by dual ESP32-CAM modules — one for daytime and one for
+            low-light conditions. It connects to the WalkSense app via your phone's hotspot and streams video for real-time AI obstacle detection. Detected objects are
             announced through text-to-speech on the PWD's phone.
           </p>
           <ul class="space-y-3">
             <li v-for="item in [
-              'Dual ESP32-CAM for wide-angle coverage',
+              'Dual ESP32-CAM with automatic day/night switching',
               'Physical distress button for emergencies',
-              'WiFi connectivity to the mobile app',
+              'Connects via your phone\'s WiFi hotspot',
               'Lightweight and wearable design',
-              'Real-time object detection with voice feedback',
+              'Detects 30 obstacle types with voice feedback',
+              'Ambient light sensor for intelligent camera switching',
             ]" :key="item" class="text-sm text-gray-300 flex items-center gap-3 justify-center md:justify-start">
               <span class="w-2 h-2 bg-[#f7d686] rounded-full shrink-0"></span>
               {{ item }}
@@ -242,7 +243,6 @@ const scrollTo = (id: string) => {
           <img src="/logo.png" alt="WalkSense" class="w-7 h-7 rounded-full" />
           <span>WalkSense</span>
         </div>
-        <p class="text-sm">A Capstone Project &middot; {{ currentYear }}</p>
       </div>
     </footer>
   </div>

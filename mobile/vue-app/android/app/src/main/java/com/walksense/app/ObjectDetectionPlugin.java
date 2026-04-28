@@ -170,7 +170,7 @@ public class ObjectDetectionPlugin extends Plugin {
     public void loadModel(PluginCall call) {
         try {
             Log.d(TAG, "Loading TFLite model...");
-            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "v7_latest_best_float16.tflite");
+            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "v8_latest_best_float16.tflite");
             Interpreter.Options options = new Interpreter.Options();
 
             // GPU acceleration with optimized CPU fallback
@@ -459,7 +459,7 @@ public class ObjectDetectionPlugin extends Plugin {
             try {
                 resized = letterboxToSquare(frameToProcess);
                 ByteBuffer inputBuffer = convertBitmapToByteBuffer(resized);
-                float[][][] outputTransposed = new float[1][33][2100];
+                float[][][] outputTransposed = new float[1][34][2100];
                 long inferenceStart = System.currentTimeMillis();
                 tflite.run(inputBuffer, outputTransposed);
                 long inferenceMs = System.currentTimeMillis() - inferenceStart;
@@ -717,7 +717,7 @@ public class ObjectDetectionPlugin extends Plugin {
 
             int classId = 0;
             float maxClassScore = output[4][i];
-            for (int j = 5; j < 33; j++) {
+            for (int j = 5; j < 34; j++) {
                 if (output[j][i] > maxClassScore) {
                     maxClassScore = output[j][i];
                     classId = j - 4;
@@ -747,17 +747,22 @@ public class ObjectDetectionPlugin extends Plugin {
         switch (className) {
             case "pothole":
             case "puddle":
+            case "glass wall":
+            case "group of people":
+                return 0.25f;
+            case "bench":
+                return 0.30f;
             case "stairs":
             case "tricycle":
             case "motorcycle":
             case "car":
             case "bus":
             case "truck":
-            case "glass wall":
             case "trash can":
+            case "elevator":
                 return 0.35f;
             case "door":
-                return 0.60f;
+                return 0.50f;
             default:
                 return defaultThreshold;
         }
@@ -794,6 +799,7 @@ public class ObjectDetectionPlugin extends Plugin {
             case "truck":            return 0.5f;
             case "cabinet":          return 1.0f;
             case "window":           return 0.8f;
+            case "elevator":         return 0.7f;
             default:                 return 1.0f;
         }
     }
@@ -852,7 +858,8 @@ public class ObjectDetectionPlugin extends Plugin {
                 "trash can",         // 25
                 "tree",              // 26
                 "stall",             // 27
-                "puddle"             // 28
+                "puddle",            // 28
+                "elevator"           // 29
         };
         if (classId >= 0 && classId < classes.length) return classes[classId];
         return "obstacle";
