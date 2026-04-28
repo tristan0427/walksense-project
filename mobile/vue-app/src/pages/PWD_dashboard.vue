@@ -637,7 +637,6 @@ const confirmLogout  = () => {
   showLogoutConfirm.value = false;
   router.push('/');
 };
-const goAccount = () => { router.push('/account'); };
 
 const goToWearableSetup = () => {
   router.push('/wearable-setup')
@@ -662,7 +661,6 @@ const goToWearableSetup = () => {
       <button @click="goToWearableSetup" class="block w-full text-left px-4 py-3 hover:bg-gray-50 text-sm font-medium text-gray-700">
         Camera Setup
       </button>
-      <button @click="goAccount" class="block w-full text-left px-4 py-3 hover:bg-gray-50 text-sm font-medium text-gray-700">Account</button>
       <button @click="logout" class="block w-full text-left px-4 py-3 text-red-600 font-semibold hover:bg-red-50 text-sm">Logout</button>
     </div>
 

@@ -8,6 +8,15 @@ import markerPinUrl from '/gps-mark-pin.png'
 
 const router = useRouter()
 const menuOpen = ref(false)
+
+const closeMenu = () => { menuOpen.value = false }
+
+const handleBackButton = () => {
+  if (menuOpen.value) {
+    closeMenu()
+    history.pushState(null, '', window.location.href)
+  }
+}
 const initialViewSet = ref(false)
 const mapContainer = ref(null)
 const map = ref(null)
@@ -32,6 +41,9 @@ onMounted(async () => {
     guardianProfile.value = JSON.parse(userStr)
   }
 
+  history.pushState(null, '', window.location.href)
+  window.addEventListener('popstate', handleBackButton)
+
   await initializeMap()
   await loadPwdLocations()
   await loadNotifications()
@@ -39,13 +51,12 @@ onMounted(async () => {
   updateInterval.value = setInterval(() => {
     loadPwdLocations()
     loadNotifications()
-  },10000)
+  }, 10000)
 })
 
 onUnmounted(() => {
-  if(updateInterval.value){
-    clearInterval(updateInterval.value)
-  }
+  if (updateInterval.value) clearInterval(updateInterval.value)
+  window.removeEventListener('popstate', handleBackButton)
 })
 
 const navigateToPwd = (lat, lng) => {
@@ -287,10 +298,9 @@ const refreshLocations = () => {
       </div>
     </header>
 
-    <!-- Slide Menu -->
+    <div v-if="menuOpen" class="fixed inset-0 z-40" @click="closeMenu" />
+
     <div v-if="menuOpen" class="absolute right-4 mt-2 w-64 bg-white rounded-xl shadow-lg ring-1 ring-black/5 z-50 overflow-hidden transition-all duration-150">
-      
-      <!-- Account Details Section -->
       <div class="px-4 py-4 border-b border-gray-100 bg-gray-50/50">
         <div class="flex items-center gap-3 mb-3">
           <div class="w-10 h-10 rounded-full bg-yellow-200 text-yellow-700 flex items-center justify-center font-bold text-lg shrink-0">
