@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { Head } from '@inertiajs/vue3'
 import { ref } from 'vue'
-
-const currentYear = new Date().getFullYear()
+new Date().getFullYear();
 const mobileMenuOpen = ref(false)
 
 const features = [
