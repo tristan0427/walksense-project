@@ -728,10 +728,14 @@ public class ObjectDetectionPlugin extends Plugin {
             float requiredThreshold = getThresholdForClass(className, threshold);
             if (maxClassScore < requiredThreshold) continue;
 
-            float x1 = Math.max(0, Math.min(INPUT_SIZE - 1, (cx - w / 2) * INPUT_SIZE));
-            float y1 = Math.max(0, Math.min(INPUT_SIZE - 1, (cy - h / 2) * INPUT_SIZE));
-            float x2 = Math.max(0, Math.min(INPUT_SIZE - 1, (cx + w / 2) * INPUT_SIZE));
-            float y2 = Math.max(0, Math.min(INPUT_SIZE - 1, (cy + h / 2) * INPUT_SIZE));
+            // Auto-detect if coordinates are absolute (0-320) or normalized (0-1)
+            // The Float16 model outputs 0-1, the Dynamic Range model outputs 0-320
+            float scale = (cx > 2.0f || cy > 2.0f || w > 2.0f) ? 1.0f : INPUT_SIZE;
+
+            float x1 = Math.max(0, Math.min(INPUT_SIZE - 1, (cx - w / 2) * scale));
+            float y1 = Math.max(0, Math.min(INPUT_SIZE - 1, (cy - h / 2) * scale));
+            float x2 = Math.max(0, Math.min(INPUT_SIZE - 1, (cx + w / 2) * scale));
+            float y2 = Math.max(0, Math.min(INPUT_SIZE - 1, (cy + h / 2) * scale));
 
             Detection det = new Detection();
             det.className  = getClassName(classId);
