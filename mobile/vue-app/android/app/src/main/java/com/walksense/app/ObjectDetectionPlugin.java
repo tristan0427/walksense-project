@@ -170,7 +170,7 @@ public class ObjectDetectionPlugin extends Plugin {
     public void loadModel(PluginCall call) {
         try {
             Log.d(TAG, "Loading TFLite model...");
-            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "v9_latest_best_int8.tflite");
+            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "best_dynamic_range.tflite");
             Interpreter.Options options = new Interpreter.Options();
 
             // GPU acceleration with optimized CPU fallback

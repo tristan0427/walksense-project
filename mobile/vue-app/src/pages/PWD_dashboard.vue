@@ -22,6 +22,15 @@ const guardian = ref(null);
 const menuOpen = ref(false);
 const showLogoutConfirm = ref(false);
 
+const closeMenu = () => { menuOpen.value = false; };
+
+const handleBackButton = () => {
+  if (menuOpen.value) {
+    closeMenu();
+    history.pushState(null, '', window.location.href);
+  }
+};
+
 // ── Camera connection state ──────────────────────────────────────────────────
 const dayCamConnected   = ref(false);
 const nightCamConnected = ref(false);
@@ -131,6 +140,9 @@ const saveIps = async () => {
 onMounted(async () => {
   console.log('PWD Dashboard mounted');
 
+  history.pushState(null, '', window.location.href);
+  window.addEventListener('popstate', handleBackButton);
+
   ObjectDetection.addListener('dayCamConnected', () => {
     dayCamConnected.value = true;
     dayCamStatus.value    = 'Connected';
@@ -187,6 +199,7 @@ onMounted(async () => {
 });
 
 onUnmounted(async () => {
+  window.removeEventListener('popstate', handleBackButton);
   stopDetection();
   stopLuxPolling();
   stopEmergencyPolling();
@@ -340,6 +353,7 @@ const onLuxReceived = async (lux) => {
 // ── Emergency Button Handling ───────────────────────────────────────────────
 
 let emergencyInterval = null;
+let lastHardwarePress = 0;
 
 const startEmergencyPolling = () => {
   if (emergencyInterval) return;
@@ -359,7 +373,11 @@ const startEmergencyPolling = () => {
       }
 
       if (data && data.pressed === true) {
-        sendDistressSignal('hardware_button');
+        const now = Date.now();
+        if (now - lastHardwarePress >= 5000) {
+          lastHardwarePress = now;
+          sendDistressSignal('hardware_button');
+        }
       }
       nightPollFailures = 0;
     } catch (err) {
@@ -371,7 +389,7 @@ const startEmergencyPolling = () => {
         attemptNightCamReconnect();
       }
     }
-  }, 2000);
+  }, 500);
 };
 
 const stopEmergencyPolling = () => {
@@ -417,7 +435,7 @@ const sendDistressSignal = async (source = 'app_button') => {
   if (isSendingDistress.value) return;
 
   isSendingDistress.value = true;
-  console.log(`Sending distress signal from ${source}...`);
+  try { await TextToSpeech.speak({ text: 'Sending emergency signal.', lang: 'en-US' }); } catch (e) {}
 
   try {
     let lat = null;
@@ -657,6 +675,7 @@ const goToWearableSetup = () => {
     </header>
 
     <!-- Slide Menu -->
+    <div v-if="menuOpen" class="fixed inset-0 z-40" @click="closeMenu"></div>
     <div v-if="menuOpen" class="absolute right-4 mt-14 w-44 bg-white rounded-xl shadow-lg ring-1 ring-black/5 z-50 overflow-hidden transition-all duration-150">
       <button @click="goToWearableSetup" class="block w-full text-left px-4 py-3 hover:bg-gray-50 text-sm font-medium text-gray-700">
         Camera Setup
@@ -963,24 +982,6 @@ const goToWearableSetup = () => {
             <p class="text-xs text-blue-700 mt-0.5">Your location is tracked even when this app is closed or your phone is locked.</p>
           </div>
         </div>
-      </div>
-
-      <!-- Distress Button -->
-      <div class="mt-4 mb-2">
-        <button
-            @click="sendDistressSignal('app_button')"
-            :disabled="isSendingDistress"
-            class="w-full py-4 rounded-2xl shadow-lg border-2 border-red-600 bg-red-500 hover:bg-red-600 text-white font-bold text-lg flex items-center justify-center gap-3 transition-colors active:scale-95"
-        >
-          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" v-if="!isSendingDistress">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
-          </svg>
-          <svg class="w-8 h-8 animate-spin" fill="none" viewBox="0 0 24 24" v-else>
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A8.001 8.001 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          {{ isSendingDistress ? 'SENDING SOS...' : 'SEND EMERGENCY DISTRESS' }}
-        </button>
       </div>
 
       <!-- Distress Flash -->
