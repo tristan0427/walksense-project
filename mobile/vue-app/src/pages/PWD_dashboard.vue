@@ -72,6 +72,12 @@ const lastSpokenTime    = ref(0);
 const isSpeaking        = ref(false);
 const currentSpokenClass = ref(null);
 
+// ── Demo Mode ────────────────────────────────────────────────────────────────
+// Shows camera preview + bounding box overlay when ON. Zero overhead when OFF.
+const demoMode = ref(false);
+const previewCanvas = ref(null);
+let previewListener = null;
+
 // NOTE: runtimeMode and cameraFrame have been removed.
 // Base64 frame encoding is permanently disabled in the native plugin.
 // The Camera Preview block has been removed from the template.
@@ -85,7 +91,7 @@ const perfMetrics = ref({
 });
 
 const TIER_1_CLASSES = new Set(['pothole', 'glass wall', 'stairs', 'puddle']);
-const TIER_2_CLASSES = new Set(['car', 'tricycle', 'motorcycle', 'truck', 'bus', 'person', 'group of people', 'dog']);
+const TIER_2_CLASSES = new Set(['car', 'tricycle', 'motorcycle', 'truck', 'bus', 'person', 'dog']);
 const TIER_3_CLASSES = new Set([
   'pole', 'tree', 'bench', 'trash can', 'fence', 'standing aircon', 'bollards',
   'chair', 'table', 'couch', 'cabinet', 'refrigerator', 'stall'
@@ -152,6 +158,12 @@ onMounted(async () => {
   });
   ObjectDetection.addListener('dayCamError', (data) => {
     console.warn('Day cam stream error (will retry):', data.error);
+    dayCamConnected.value = false;
+    dayCamStatus.value = 'Offline';
+    // Clear detection display if no camera is connected
+    if (!nightCamConnected.value) {
+      nearestObject.value = null;
+    }
     attemptDayCamReconnect();
   });
 
@@ -164,6 +176,12 @@ onMounted(async () => {
   });
   ObjectDetection.addListener('nightCamError', (data) => {
     console.warn('Night cam stream error (will retry):', data.error);
+    nightCamConnected.value = false;
+    nightCamStatus.value = 'Offline';
+    // Clear detection display if no camera is connected
+    if (!dayCamConnected.value) {
+      nearestObject.value = null;
+    }
     attemptNightCamReconnect();
   });
 
@@ -205,6 +223,11 @@ onUnmounted(async () => {
   stopEmergencyPolling();
   if (dayReconnectTimeout)   clearTimeout(dayReconnectTimeout);
   if (nightReconnectTimeout) clearTimeout(nightReconnectTimeout);
+  // Kill demo preview if still active
+  if (demoMode.value) {
+    try { await ObjectDetection.stopPreview(); } catch (e) {}
+    if (previewListener) { previewListener.remove(); previewListener = null; }
+  }
   await ObjectDetection.stopESP32Stream();
   await ObjectDetection.removeAllListeners();
 });
@@ -492,7 +515,7 @@ const startDetection = () => {
     try {
       // NOTE: includeFrame is permanently removed.
       // Passing it would have no effect — the native plugin ignores it.
-      const result = await ObjectDetection.detectFromStream({ confidence: 0.45 });
+      const result = await ObjectDetection.detectFromStream({ confidence: 0.317 });
 
       updatePerfMetrics(result.metrics);
       const now = Date.now();
@@ -540,22 +563,22 @@ const startDetection = () => {
 
             isSpeaking.value = true;
             currentSpokenClass.value = objClass;
-            try {
-              await TextToSpeech.speak({
-                text: msg,
-                lang: 'en-US',
-                rate: ttsRate,
-                pitch: 1.0,
-                volume: 1.0
-              });
-              lastSpokenTime.value = Date.now();
-              lastSpokenByClass.set(objClass, lastSpokenTime.value);
-            } catch (ttsError) {
+            // Record cooldown timestamps immediately — not after speech finishes
+            lastSpokenTime.value = Date.now();
+            lastSpokenByClass.set(objClass, lastSpokenTime.value);
+            // Fire-and-forget: TTS runs in background, detection loop continues at 300ms
+            TextToSpeech.speak({
+              text: msg,
+              lang: 'en-US',
+              rate: ttsRate,
+              pitch: 1.0,
+              volume: 1.0
+            }).catch((ttsError) => {
               console.error('TTS error:', ttsError);
-            } finally {
+            }).finally(() => {
               isSpeaking.value = false;
               currentSpokenClass.value = null;
-            }
+            });
           }
         }
       } else {
@@ -569,7 +592,7 @@ const startDetection = () => {
       isSpeaking.value = false;
       currentSpokenClass.value = null;
     }
-  }, 1000);
+  }, 300);
 };
 
 const stopDetection = () => {
@@ -659,6 +682,95 @@ const confirmLogout  = () => {
 const goToWearableSetup = () => {
   router.push('/wearable-setup')
 }
+
+// ── Demo Mode Toggle ─────────────────────────────────────────────────────────
+const toggleDemoMode = async () => {
+  demoMode.value = !demoMode.value;
+  if (demoMode.value) {
+    // Start preview emitter in Java
+    try {
+      await ObjectDetection.startPreview();
+      console.log('✓ Demo preview started');
+    } catch (err) {
+      console.error('Failed to start preview:', err);
+      demoMode.value = false;
+    }
+    // Listen for preview frames from Java
+    previewListener = await ObjectDetection.addListener('previewFrame', (data) => {
+      if (!data.frame || !previewCanvas.value) return;
+      const img = new Image();
+      img.onload = () => {
+        const canvas = previewCanvas.value;
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        drawBoundingBox(ctx, canvas.width, canvas.height);
+        drawFpsOverlay(ctx);
+      };
+      img.src = data.frame;
+    });
+  } else {
+    // Stop preview emitter
+    try {
+      await ObjectDetection.stopPreview();
+      console.log('✓ Demo preview stopped');
+    } catch (err) {
+      console.error('Failed to stop preview:', err);
+    }
+    // Remove listener
+    if (previewListener) {
+      previewListener.remove();
+      previewListener = null;
+    }
+    // Clear canvas
+    if (previewCanvas.value) {
+      const ctx = previewCanvas.value.getContext('2d');
+      ctx.clearRect(0, 0, previewCanvas.value.width, previewCanvas.value.height);
+    }
+  }
+  closeMenu();
+};
+
+const drawBoundingBox = (ctx, canvasW, canvasH) => {
+  if (!nearestObject.value) return;
+  const { x1, y1, x2, y2 } = nearestObject.value;
+  if (x1 === undefined) return;
+  const cls = nearestObject.value.class;
+  const conf = nearestObject.value.confidence;
+
+  // Scale 320x320 model coords to canvas dimensions
+  const scaleX = canvasW / 320;
+  const scaleY = canvasH / 240;
+  const sx1 = x1 * scaleX, sy1 = y1 * scaleY;
+  const sx2 = x2 * scaleX, sy2 = y2 * scaleY;
+
+  // Draw box
+  ctx.strokeStyle = '#f59e0b';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(sx1, sy1, sx2 - sx1, sy2 - sy1);
+
+  // Draw label background
+  const label = `${cls} ${(conf * 100).toFixed(0)}%`;
+  ctx.font = 'bold 11px sans-serif';
+  const textW = ctx.measureText(label).width;
+  ctx.fillStyle = 'rgba(245, 158, 11, 0.85)';
+  ctx.fillRect(sx1, sy1 - 16, textW + 8, 16);
+
+  // Draw label text
+  ctx.fillStyle = '#fff';
+  ctx.fillText(label, sx1 + 4, sy1 - 4);
+};
+
+const drawFpsOverlay = (ctx) => {
+  const inf = perfMetrics.value.avgInferenceMs;
+  const det = perfMetrics.value.avgDetectMs;
+  const label = `${inf}ms inference / ${det}ms total`;
+  ctx.font = '10px sans-serif';
+  ctx.fillStyle = 'rgba(0,0,0,0.5)';
+  ctx.fillRect(2, 2, ctx.measureText(label).width + 8, 14);
+  ctx.fillStyle = '#0f0';
+  ctx.fillText(label, 6, 12);
+};
 </script>
 
 <template>
@@ -666,7 +778,10 @@ const goToWearableSetup = () => {
 
     <!-- Header -->
     <header class="bg-[#f7d686] border-b border-yellow-300 px-4 py-3 flex items-center justify-between drop-shadow-sm">
-      <h1 class="text-sm font-black tracking-widest uppercase text-gray-800">WALKSENSE</h1>
+      <div class="flex items-center gap-2">
+        <h1 class="text-sm font-black tracking-widest uppercase text-gray-800">WALKSENSE</h1>
+        <span v-if="demoMode" class="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-amber-500 text-white animate-pulse">DEMO</span>
+      </div>
       <button @click="menuOpen = !menuOpen" class="p-1 rounded-lg hover:bg-yellow-400/40 transition">
         <svg class="w-6 h-6 text-gray-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
@@ -676,11 +791,31 @@ const goToWearableSetup = () => {
 
     <!-- Slide Menu -->
     <div v-if="menuOpen" class="fixed inset-0 z-40" @click="closeMenu"></div>
-    <div v-if="menuOpen" class="absolute right-4 mt-14 w-44 bg-white rounded-xl shadow-lg ring-1 ring-black/5 z-50 overflow-hidden transition-all duration-150">
+    <div v-if="menuOpen" class="absolute right-4 mt-14 w-52 bg-white rounded-xl shadow-lg ring-1 ring-black/5 z-50 overflow-hidden transition-all duration-150">
       <button @click="goToWearableSetup" class="block w-full text-left px-4 py-3 hover:bg-gray-50 text-sm font-medium text-gray-700">
         Camera Setup
       </button>
-      <button @click="logout" class="block w-full text-left px-4 py-3 text-red-600 font-semibold hover:bg-red-50 text-sm">Logout</button>
+      <div class="border-t border-gray-100">
+        <button @click="toggleDemoMode" class="flex items-center justify-between w-full px-4 py-3 hover:bg-gray-50 text-sm">
+          <div class="flex items-center gap-2">
+            <span>📹</span>
+            <div>
+              <p class="font-medium text-gray-700 text-left">Demo Mode</p>
+              <p class="text-[10px] text-gray-400">Camera preview + boxes</p>
+            </div>
+          </div>
+          <div :class="[
+            'w-9 h-5 rounded-full transition-colors duration-200 relative',
+            demoMode ? 'bg-amber-500' : 'bg-gray-300'
+          ]">
+            <div :class="[
+              'absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform duration-200',
+              demoMode ? 'translate-x-4' : 'translate-x-0.5'
+            ]"></div>
+          </div>
+        </button>
+      </div>
+      <button @click="logout" class="block w-full text-left px-4 py-3 text-red-600 font-semibold hover:bg-red-50 text-sm border-t border-gray-100">Logout</button>
     </div>
 
     <!-- IP Setup Modal -->
@@ -917,6 +1052,24 @@ const goToWearableSetup = () => {
           </svg>
           <p class="text-sm font-semibold">Path clear</p>
         </div>
+      </div>
+
+      <!-- Demo Mode Preview — only renders when demoMode is active -->
+      <div v-if="demoMode" class="bg-gray-900 rounded-2xl shadow ring-1 ring-gray-700 p-3 transition-shadow hover:shadow-md">
+        <div class="flex items-center justify-between mb-2">
+          <div class="flex items-center gap-2">
+            <span class="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+            <h2 class="text-sm font-bold tracking-tight text-white">Camera Preview</h2>
+          </div>
+          <span class="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-amber-500 text-white">DEMO</span>
+        </div>
+        <div class="relative w-full overflow-hidden rounded-lg bg-black" style="aspect-ratio: 4/3;">
+          <canvas ref="previewCanvas" width="320" height="240"
+            class="w-full h-full object-contain" style="image-rendering: auto;"></canvas>
+        </div>
+        <p class="text-[10px] text-amber-400 mt-2 text-center font-medium">
+          ⚠ Demo mode active
+        </p>
       </div>
 
       <!-- Performance Metrics (lightweight text-only, always visible) -->

@@ -106,6 +106,7 @@ const initializeMap = async () => {
 
 const loadPwdLocations = async () => {
   try {
+    error.value = ''
     const response = await axios.get('/api/location/all-pwds')
     pwdLocations.value = response.data.pwd_locations
 

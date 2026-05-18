@@ -28,6 +28,11 @@ export interface ObjectDetectionPlugin {
             confidence: number;
             camera: string;
             imminent: boolean;
+            // Bounding box coordinates (320x320 model space) for demo mode overlay
+            x1?: number;
+            y1?: number;
+            x2?: number;
+            y2?: number;
         };
         metrics?: {
             inferenceMs: number;
@@ -39,6 +44,10 @@ export interface ObjectDetectionPlugin {
     stopESP32Stream(): Promise<{ success: boolean }>;
 
     unloadModel(): Promise<{ success: boolean }>;
+
+    // Demo mode preview — emits camera frames as Base64 JPEG for canvas overlay
+    startPreview(): Promise<{ success: boolean }>;
+    stopPreview(): Promise<{ success: boolean }>;
 
     scanHotspotNetwork(options?: {
         port?: number;
@@ -57,6 +66,11 @@ export interface ObjectDetectionPlugin {
     addListener(
         eventName: 'streamError',
         listenerFunc: (data: { error: string }) => void
+    ): Promise<PluginListenerHandle> & PluginListenerHandle;
+
+    addListener(
+        eventName: 'previewFrame',
+        listenerFunc: (data: { frame: string | null; camera?: string }) => void
     ): Promise<PluginListenerHandle> & PluginListenerHandle;
 
     removeAllListeners(): Promise<void>;

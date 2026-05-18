@@ -177,7 +177,7 @@ const resetAndReprovision = async () => {
     <div class="p-4 space-y-4">
 
       <!-- Before-you-start instructions -->
-      <div class="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+      <div v-if="!isRunning && !isDone && !countdown" class="bg-blue-50 border border-blue-200 rounded-2xl p-4">
         <p class="text-sm font-semibold text-blue-800 mb-1">Before you start:</p>
         <ol class="text-xs text-blue-700 space-y-1 list-decimal list-inside">
           <li>Enable your phone's <strong>Mobile Hotspot</strong> in Settings</li>
@@ -188,27 +188,19 @@ const resetAndReprovision = async () => {
       </div>
 
       <!-- Quick Find — boards already on hotspot -->
-      <div class="bg-green-50 border border-green-200 rounded-2xl p-4 space-y-2">
+      <div v-if="!isRunning && !isDone && !countdown" class="bg-green-50 border border-green-200 rounded-2xl p-4 space-y-2">
         <p class="text-sm font-semibold text-green-800">Cameras already connected to your hotspot?</p>
         <p class="text-xs text-green-700">Tap below to find them — no credentials needed.</p>
         <button
-            v-if="!isRunning"
             @click="rediscover"
             class="w-full py-2.5 rounded-xl text-sm font-semibold text-green-800 bg-white border border-green-300 hover:bg-green-50 transition"
         >
           Find Cameras on Network
         </button>
-        <button
-            v-else
-            disabled
-            class="w-full py-2.5 rounded-xl text-sm font-semibold text-gray-400 bg-gray-200 cursor-not-allowed"
-        >
-          Scanning...
-        </button>
       </div>
 
       <!-- Credentials form -->
-      <div class="bg-white rounded-2xl shadow p-4 space-y-3">
+      <div v-if="!isRunning && !isDone && !countdown" class="bg-white rounded-2xl shadow p-4 space-y-3">
         <h2 class="font-semibold text-gray-800">Your Hotspot Credentials</h2>
 
         <div>
@@ -217,8 +209,7 @@ const resetAndReprovision = async () => {
               v-model="ssid"
               type="text"
               placeholder="e.g. My Phone"
-              :disabled="isRunning"
-              class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 disabled:bg-gray-50"
+              class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400"
           />
         </div>
 
@@ -229,8 +220,7 @@ const resetAndReprovision = async () => {
                 v-model="password"
                 :type="showPwd ? 'text' : 'password'"
                 placeholder="Hotspot password"
-                :disabled="isRunning"
-                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 disabled:bg-gray-50 pr-12"
+                class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400 pr-12"
             />
             <button
                 @click="showPwd = !showPwd"
@@ -248,7 +238,7 @@ const resetAndReprovision = async () => {
       </div>
 
       <!-- Primary action buttons -->
-      <div class="space-y-2">
+      <div v-if="!isRunning && !isDone && !countdown" class="space-y-2">
         <button
             @click="startSetup"
             :disabled="!canStart"
@@ -259,31 +249,35 @@ const resetAndReprovision = async () => {
               : 'bg-gray-200 text-gray-400 cursor-not-allowed'
           ]"
         >
-          <span v-if="isRunning && !countdown" class="flex items-center justify-center gap-2">
-            <svg class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z"/>
-            </svg>
-            Setting up...
-          </span>
-          <span v-else-if="countdown > 0">
-            Waiting for reboot... {{ countdown }}s
-          </span>
-          <span v-else>Start Wearable Setup</span>
+          Start Wearable Setup
         </button>
-
       </div>
 
-      <!-- Current Status Card -->
-      <div v-if="currentStatus && !isDone" class="bg-white rounded-2xl shadow p-5 flex flex-col items-center justify-center text-center space-y-3">
-        <div v-if="currentStatus.type === 'error'" class="w-12 h-12 bg-red-100 text-red-600 rounded-full flex items-center justify-center">
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+      <!-- Current Status Card (Active Setup or Rebooting) -->
+      <div v-if="(isRunning || countdown > 0) && !isDone" class="bg-white rounded-2xl shadow p-8 flex flex-col items-center justify-center text-center space-y-4">
+        <div v-if="currentStatus?.type === 'error'" class="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mb-2">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-8 w-8" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
         </div>
-        <div v-else class="w-10 h-10 border-4 border-yellow-200 border-t-yellow-500 rounded-full animate-spin"></div>
+        
+        <div v-else class="relative w-16 h-16 mb-2">
+          <div class="absolute inset-0 border-4 border-yellow-100 rounded-full"></div>
+          <div class="absolute inset-0 border-4 border-yellow-500 border-t-transparent rounded-full animate-spin"></div>
+          <div v-if="countdown > 0" class="absolute inset-0 flex items-center justify-center text-lg font-black text-yellow-600">
+            {{ countdown }}
+          </div>
+        </div>
         
         <div>
-          <h3 class="font-semibold text-gray-800">{{ currentStatus.type === 'error' ? 'Setup Failed' : 'Setting up...' }}</h3>
-          <p :class="['text-sm mt-1', currentStatus.type === 'error' ? 'text-red-500' : 'text-gray-500']">{{ currentStatus.text }}</p>
+          <h3 class="text-lg font-bold text-gray-800">
+            {{ currentStatus?.type === 'error' ? 'Setup Failed' : (countdown > 0 ? 'Rebooting Boards' : 'Setup in Progress') }}
+          </h3>
+          <p :class="['text-sm mt-1 max-w-[240px]', currentStatus?.type === 'error' ? 'text-red-500' : 'text-gray-500']">
+            {{ currentStatus?.text || 'Initializing...' }}
+          </p>
+        </div>
+
+        <div v-if="countdown > 0" class="w-full bg-gray-100 rounded-full h-1.5 mt-4">
+          <div class="bg-yellow-400 h-1.5 rounded-full transition-all duration-1000" :style="{ width: (countdown / 10 * 100) + '%' }"></div>
         </div>
       </div>
 
@@ -345,7 +339,7 @@ const resetAndReprovision = async () => {
       </div>
 
       <!-- ── Method 3: Reset & Re-provision ── -->
-      <div class="bg-red-50 border border-red-200 rounded-2xl p-4 space-y-3">
+      <div v-if="!isRunning && !isDone && !countdown" class="bg-red-50 border border-red-200 rounded-2xl p-4 space-y-3">
         <div class="flex items-center gap-2 text-red-800">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
           <p class="text-sm font-bold">Reset Cameras (Demo / Debug)</p>
@@ -357,28 +351,14 @@ const resetAndReprovision = async () => {
         </p>
         <button
             @click="resetAndReprovision"
-            :disabled="isRunning"
-            :class="[
-            'w-full py-2.5 rounded-xl text-sm font-semibold transition',
-            isRunning
-              ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-              : 'bg-white hover:bg-red-50 text-red-700 border border-red-300'
-          ]"
+            class="w-full py-2.5 rounded-xl text-sm font-semibold transition bg-white hover:bg-red-50 text-red-700 border border-red-300"
         >
-          <span v-if="isRunning && countdown > 0">
-            Waiting for reboot... {{ countdown }}s
-          </span>
-          <span v-else-if="isRunning">
-            Resetting...
-          </span>
-          <span v-else>
-            Reset & Re-provision Both Cameras
-          </span>
+          Reset & Re-provision Both Cameras
         </button>
       </div>
 
       <!-- Physical reset fallback tip -->
-      <div class="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex gap-3">
+      <div v-if="!isRunning && !countdown" class="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex gap-3">
         <div class="flex-shrink-0 mt-0.5 text-amber-500">
           <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
         </div>
