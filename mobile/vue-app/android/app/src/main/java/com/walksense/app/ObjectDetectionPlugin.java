@@ -64,7 +64,6 @@ public class ObjectDetectionPlugin extends Plugin {
     private GpuDelegate gpuDelegate;
 
     // Pre-allocated reusable buffers — allocated once at model load, reused every frame
-    // Avoids ~1.9MB of per-frame GC pressure (~7-13ms saved per detection call)
     private ByteBuffer reusableInputBuffer;
     private int[] reusableRgbValues;
     private Bitmap reusableLetterbox;
@@ -97,8 +96,6 @@ public class ObjectDetectionPlugin extends Plugin {
     private final Object detectLock = new Object();
 
     // ===== Demo Mode Preview Emitter =====
-    // When demo mode is ON, emits JPEG frames to JS via Capacitor events
-    // for live camera preview + bounding box overlay. Zero overhead when OFF.
     private ScheduledExecutorService previewExecutor;
     private ScheduledFuture<?> previewTask;
     private volatile boolean demoModeActive = false;
@@ -123,9 +120,27 @@ public class ObjectDetectionPlugin extends Plugin {
     // ===== Close-Proximity Detection Helpers =====
 
     private boolean isFrameFillingDetection(Detection det) {
-        float bboxArea  = (det.x2 - det.x1) * (det.y2 - det.y1);
-        float frameArea = INPUT_SIZE * INPUT_SIZE;
-        return (bboxArea / frameArea) > IMMINENT_OCCUPANCY_THRESHOLD;
+             float bboxArea  = (det.x2 - det.x1) * (det.y2 - det.y1);
+             float frameArea = INPUT_SIZE * INPUT_SIZE;
+             float ratio     = bboxArea / frameArea;
+
+             switch (det.className) {
+                 case "stairs":
+                     return ratio > 0.30f && det.y2 > 250;
+
+                 case "pothole":
+                 case "puddle":
+                     return ratio > 0.25f && det.y2 > 275 && det.confidence > 0.45f;
+
+                 case "person":
+                 case "dog":
+                 case "bench":
+                 case "motorcycle":
+                     return ratio > 0.45f;
+
+                 default:
+                     return ratio > 0.75f;
+         }
     }
 
     private String getTemporalOverrideClass(Detection det) {
@@ -186,7 +201,7 @@ public class ObjectDetectionPlugin extends Plugin {
     public void loadModel(PluginCall call) {
         try {
             Log.d(TAG, "Loading TFLite model...");
-            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "v12_latest_best_float16.tflite");
+            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "v13_latest_best_float16.tflite");
             Interpreter.Options options = new Interpreter.Options();
 
             // GPU acceleration with optimized CPU fallback
@@ -211,15 +226,11 @@ public class ObjectDetectionPlugin extends Plugin {
             }
 
             if (!usingGpu) {
-                // Dynamically pick thread count: use half of available cores to avoid
-                // thermal throttling on weaker/cheaper chipsets, capped at 4.
+
                 int availableCores = Runtime.getRuntime().availableProcessors();
                 int threadCount = Math.min(Math.max(availableCores / 2, 2), 4);
                 options.setNumThreads(threadCount);
 
-                // XNNPACK is the fastest CPU inference delegate available in TFLite 2.x.
-                // It uses SIMD intrinsics (NEON on ARM) for fast float32/float16 math
-                // without requiring a GPU. Always enable it on the CPU path.
                 options.setUseXNNPACK(true);
 
                 Log.d(TAG, "✓ CPU path: threads=" + threadCount + ", XNNPACK=true (cores=" + availableCores + ")");
@@ -248,15 +259,12 @@ public class ObjectDetectionPlugin extends Plugin {
         }
     }
 
-    // NOTE: diagnosticsEnabled flag is intentionally removed.
-    // Base64 frame encoding has been permanently stripped from this plugin.
-    // The setDiagnosticsMode method is kept as a no-op stub for backward
-    // compatibility with any JS callers that haven't been updated yet.
+
     @PluginMethod
     public void setDiagnosticsMode(PluginCall call) {
         JSObject ret = new JSObject();
         ret.put("success", true);
-        ret.put("diagnosticsEnabled", false);  // always false — frame encoding removed
+        ret.put("diagnosticsEnabled", false);
         call.resolve(ret);
     }
 
@@ -511,12 +519,6 @@ public class ObjectDetectionPlugin extends Plugin {
                 Double confidenceParam = call.getDouble("confidence", (double) DEFAULT_CONFIDENCE);
                 float confidenceThreshold = confidenceParam != null ? confidenceParam.floatValue() : DEFAULT_CONFIDENCE;
 
-                // NOTE: includeFrame parameter is intentionally ignored.
-                // Base64 frame encoding has been permanently removed to eliminate
-                // the 100-300ms CPU overhead it caused on every detection cycle.
-                // Visual debugging must be done via Android Studio's Logcat
-                // or by temporarily re-attaching a USB display/debugger.
-
                 List<Detection> detections = postProcessTransposed(reusableOutput[0], confidenceThreshold);
 
                 Detection nearest = findNearestObject(detections);
@@ -566,8 +568,6 @@ public class ObjectDetectionPlugin extends Plugin {
                 Log.e(TAG, "Detection failed", e);
                 call.reject("Detection error: " + e.getMessage());
             } finally {
-                // Note: resized points to reusableLetterbox — do NOT recycle it here.
-                // It is recycled only in unloadModel() when the model is fully shut down.
                 if (frameToProcess != null && !frameToProcess.isRecycled()) frameToProcess.recycle();
                 long detectMs = System.currentTimeMillis() - detectStart;
                 totalDetectMs.addAndGet(detectMs);
@@ -810,13 +810,6 @@ public class ObjectDetectionPlugin extends Plugin {
 
     // ===== Helper Methods =====
 
-    // NOTE: drawDetections() and getClassColor() have been permanently removed.
-    // These methods drew bounding boxes onto a Bitmap copy of the frame before
-    // Base64 encoding it for the JS layer. With Base64 encoding gone, there is
-    // no output surface to draw onto. Removing them saves ~50-100ms per detection
-    // call on CPU-only devices by eliminating Canvas allocations, pixel-level
-    // loop iterations over a 320x320 bitmap, and Paint object creation.
-
     private ByteBuffer convertBitmapToByteBuffer(Bitmap bitmap) {
         // Reuse pre-allocated buffer — rewind resets position to 0 (like washing the plate)
         reusableInputBuffer.rewind();
@@ -865,6 +858,10 @@ public class ObjectDetectionPlugin extends Plugin {
             float x2 = Math.max(0, Math.min(INPUT_SIZE - 1, (cx + w / 2) * scale));
             float y2 = Math.max(0, Math.min(INPUT_SIZE - 1, (cy + h / 2) * scale));
 
+            if (className.equals("glass wall") && y2 < (INPUT_SIZE * 0.30f)) {
+               continue;
+            }
+
             Detection det = new Detection();
             det.className  = getClassName(classId);
             det.confidence = maxClassScore;
@@ -882,8 +879,9 @@ public class ObjectDetectionPlugin extends Plugin {
             // Tier 1: Ground hazards — LOWERED day threshold for better recall
             case "pothole":
             case "puddle":
-            case "glass wall":
                 return isNightCam ? 0.40f : 0.28f;
+            case "glass wall":
+                return isNightCam ? 0.40f : 0.35f;
 
             // Tier 1.5: Low-recall obstacles — LOWERED day threshold
             case "bench":

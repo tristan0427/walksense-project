@@ -7,6 +7,18 @@ import axios from "axios";
 import markerPinUrl from '/gps-mark-pin.png'
 
 const router = useRouter()
+
+const alertSound = new Audio('/alert.mp3')
+
+const triggerEmergencyAlarm = () => {
+  if (navigator.vibrate) {
+    navigator.vibrate([500, 200, 500, 200, 1000])
+  }
+  alertSound.currentTime = 0
+  alertSound.play().catch(e => {
+    console.warn('Audio play blocked by browser policy (user must tap screen first):', e)
+  })
+}
 const menuOpen = ref(false)
 
 const closeMenu = () => { menuOpen.value = false }
@@ -28,6 +40,16 @@ const error = ref('')
 const updateInterval = ref(null)
 const showLogoutConfirm = ref(false)
 const guardianProfile = ref(null)
+const distressPulseMarker = ref(null)
+const showDismissConfirm = ref(null)
+const guardianLocation = ref(null)
+
+const normalIcon = L.icon({
+  iconUrl: markerPinUrl,
+  iconSize: [40, 40],
+  iconAnchor: [20, 40],
+  popupAnchor: [0, -40],
+})
 
 axios.defaults.baseURL = import.meta.env.VITE_API_BASE_URL
 const token = localStorage.getItem('token')
@@ -44,6 +66,8 @@ onMounted(async () => {
   history.pushState(null, '', window.location.href)
   window.addEventListener('popstate', handleBackButton)
 
+  trackGuardianLocation()
+
   await initializeMap()
   await loadPwdLocations()
   await loadNotifications()
@@ -59,23 +83,45 @@ onUnmounted(() => {
   window.removeEventListener('popstate', handleBackButton)
 })
 
-const navigateToPwd = (lat, lng) => {
-  navigator.geolocation.getCurrentPosition(
-      (position) => {
-        const origin = `${position.coords.latitude},${position.coords.longitude}`
-        const destination = `${lat},${lng}`
-        window.open(
-            `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`,
-            '_blank'
-        )
-      },
-      () => {
-        window.open(
-            `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`,
-            '_blank'
-        )
-      }
+window._isNavigating = false
+
+const navigateToPwd = (lat, lng, event) => {
+  if (window._isNavigating) return
+  
+  window._isNavigating = true
+  
+  let btn = null
+  if (event && event.target) {
+    btn = event.target
+    // Store original styles to restore later
+    btn.dataset.origBg = btn.style.background
+    btn.dataset.origColor = btn.style.color
+    btn.dataset.origText = btn.innerText
+    
+    // Apply Loading State
+    btn.disabled = true
+    btn.style.background = '#d1d5db'
+    btn.style.color = '#4b5563'
+    btn.innerHTML = 'Opening Maps...'
+  }
+
+  // Fast Fallback: Open Google Maps instantly with only destination
+  const destination = `${lat},${lng}`
+  window.open(
+      `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=driving`,
+      '_blank'
   )
+
+  // Reset guard flag and button UI after a short delay
+  setTimeout(() => {
+    window._isNavigating = false
+    if (btn) {
+      btn.disabled = false
+      btn.style.background = btn.dataset.origBg || '#f7d686'
+      btn.style.color = btn.dataset.origColor || '#5a3e00'
+      btn.innerHTML = btn.dataset.origText || 'Navigate to PWD'
+    }
+  }, 1000)
 }
 
 window._navigateToPwd = navigateToPwd
@@ -123,16 +169,54 @@ const loadPwdLocations = async () => {
 const loadNotifications = async () => {
   try {
     const response = await axios.get('/api/notifications')
-    notifications.value = response.data.notifications
+    const fetchedNotifs = response.data.notifications
+    
+    // Check for new emergency alerts
+    if (fetchedNotifs && fetchedNotifs.length > 0) {
+      // Find the highest ID which represents the newest notification
+      const newestId = Math.max(...fetchedNotifs.map(n => n.id))
+      const lastAlertedId = parseInt(localStorage.getItem('last_alerted_id') || '0')
+      
+      if (newestId > lastAlertedId) {
+        triggerEmergencyAlarm()
+        localStorage.setItem('last_alerted_id', newestId.toString())
+      }
+    }
+
+    notifications.value = fetchedNotifs
   } catch(err) {
     console.error('Failed to load notifications:', err)
   }
 }
 
+const confirmDismiss = (notifId) => {
+  showDismissConfirm.value = notifId
+}
+
+const cancelDismiss = () => {
+  showDismissConfirm.value = null
+}
+
+const isLocatingDistress = ref(false)
+
+const clearSOSView = () => {
+  isLocatingDistress.value = false
+  if (distressPulseMarker.value && map.value) {
+    map.value.removeLayer(distressPulseMarker.value)
+    distressPulseMarker.value = null
+  }
+  markers.value.forEach((marker) => marker.setIcon(normalIcon))
+  if (map.value) {
+    map.value.closePopup()
+  }
+}
+
 const deleteNotification = async (id) => {
+  showDismissConfirm.value = null
   try {
     await axios.delete(`/api/notifications/${id}`)
     notifications.value = notifications.value.filter(n => n.id !== id)
+    clearSOSView()
   } catch (err) {
     console.error('Failed to delete notification:', err)
   }
@@ -155,18 +239,10 @@ const updateMapMarkers = () => {
       const marker = markers.value.get(pwd.pwd_id)
       marker?.setLatLng(position)
     } else {
-      // Create custom marker
-      const customIcon = L.icon({
-        iconUrl: markerPinUrl,
-        iconSize: [40, 40],
-        iconAnchor: [20, 40],
-        popupAnchor: [0, -40],
-      })
-
-      const marker = L.marker(position, { icon: customIcon }).addTo(map.value)
+      const marker = L.marker(position, { icon: normalIcon }).addTo(map.value)
 
 
-      const isOnline = isPwdOnline(pwd.location.last_updated)
+      const isOnline = isPwdOnline(pwd)
 
       marker.bindPopup(`
   <div style="min-width: 200px; font-family: sans-serif;">
@@ -194,11 +270,11 @@ const updateMapMarkers = () => {
       }
       ${pwd.location.battery_level ? `<p style="margin: 4px 0;">🔋 ${pwd.location.battery_level}%</p>` : ''}
       <p style="margin: 4px 0; font-size: 11px; color: #6b7280;">
-        ${formatLastUpdated(pwd.location.last_updated)}
+        ${formatLastUpdated(pwd)}
       </p>
     </div>
 
-        <button onclick="window._navigateToPwd(${pwd.location.latitude}, ${pwd.location.longitude})"
+        <button onclick="window._navigateToPwd(${pwd.location.latitude}, ${pwd.location.longitude}, event)"
        style="
          display: block;
          width: 100%;
@@ -231,15 +307,33 @@ const updateMapMarkers = () => {
   }
 }
 
-const isPwdOnline = (lastUpdated) => {
-  const lastUpdate = new Date(lastUpdated)
+const isPwdOnline = (pwd) => {
+  if (!pwd || !pwd.location) return false
+
+  // Use server relative seconds_ago if available
+  if (pwd.seconds_ago !== undefined && pwd.seconds_ago !== null) {
+    return pwd.seconds_ago < 600 // 10 minutes
+  }
+
+  // Fallback to client-side system clock calculation
+  if (!pwd.location.last_updated) return false
+  const lastUpdate = new Date(pwd.location.last_updated)
   const now = new Date()
   const diffMinutes = (now.getTime() - lastUpdate.getTime()) / 60000
-  return diffMinutes < 2
+  return diffMinutes < 10 // 10 minutes fallback
 }
 
-const formatLastUpdated = (dateString) => {
-  const date = new Date(dateString)
+const formatLastUpdated = (pwd) => {
+  if (pwd && pwd.seconds_ago !== undefined && pwd.seconds_ago !== null) {
+    const diffMins = Math.floor(pwd.seconds_ago / 60)
+    if (diffMins < 1) return 'Just now'
+    if (diffMins < 60) return `${diffMins} min ago`
+    const diffHours = Math.floor(diffMins / 60)
+    if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`
+  }
+
+  if (!pwd || !pwd.location || !pwd.location.last_updated) return ''
+  const date = new Date(pwd.location.last_updated)
   const now = new Date()
   const diffMs = now.getTime() - date.getTime()
   const diffMins = Math.floor(diffMs / 60000)
@@ -271,13 +365,113 @@ const refreshLocations = () => {
   loading.value = true
   loadPwdLocations()
 }
+
+const trackGuardianLocation = () => {
+  if (!navigator.geolocation) return
+  navigator.geolocation.watchPosition(
+    (pos) => {
+      guardianLocation.value = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      }
+    },
+    () => {},
+    { enableHighAccuracy: false, maximumAge: 30000 }
+  )
+}
+
+const formatAlertTime = (dateString) => {
+  const date = new Date(dateString)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffMins = Math.floor(diffMs / 60000)
+
+  if (diffMins < 1) return 'Just now'
+  if (diffMins < 60) return `${diffMins} min ago`
+
+  const diffHours = Math.floor(diffMins / 60)
+  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`
+
+  const diffDays = Math.floor(diffHours / 24)
+  return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`
+}
+
+const isOldAlert = (dateString) => {
+  const date = new Date(dateString)
+  const now = new Date()
+  return (now.getTime() - date.getTime()) > 600000
+}
+
+const getDistanceToNotif = (notif) => {
+  if (!guardianLocation.value || !notif.latitude || !notif.longitude) return null
+  const R = 6371
+  const dLat = (parseFloat(notif.latitude) - guardianLocation.value.lat) * Math.PI / 180
+  const dLng = (parseFloat(notif.longitude) - guardianLocation.value.lng) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(guardianLocation.value.lat * Math.PI / 180) *
+    Math.cos(parseFloat(notif.latitude) * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  const km = R * c
+  return km < 1 ? `${Math.round(km * 1000)}m away` : `${km.toFixed(1)}km away`
+}
+
+const createSOSIcon = () => {
+  return L.divIcon({
+    className: '',
+    html: `<svg width="44" height="44" viewBox="0 0 44 44" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="22" cy="22" r="18" fill="#dc2626" stroke="#fff" stroke-width="2.5"/>
+      <text x="22" y="29" text-anchor="middle" fill="white" font-size="24" font-weight="bold" font-family="sans-serif">!</text>
+    </svg>`,
+    iconSize: [44, 44],
+    iconAnchor: [22, 22],
+    popupAnchor: [0, -22],
+  })
+}
+
+const locateDistressOnMap = (notif) => {
+  isLocatingDistress.value = true
+  if (!map.value || !notif.latitude || !notif.longitude) return
+
+  const lat = parseFloat(notif.latitude)
+  const lng = parseFloat(notif.longitude)
+
+  map.value.setView([lat, lng], 18)
+
+  if (distressPulseMarker.value) {
+    map.value.removeLayer(distressPulseMarker.value)
+  }
+  const pulseIcon = L.divIcon({
+    className: '',
+    html: '<div class="sonar-pulse"></div>',
+    iconSize: [60, 60],
+    iconAnchor: [30, 30],
+  })
+  distressPulseMarker.value = L.marker([lat, lng], { icon: pulseIcon, interactive: false }).addTo(map.value)
+
+  let closestMarker = null
+  let closestDist = Infinity
+  markers.value.forEach((marker) => {
+    const pos = marker.getLatLng()
+    const dist = Math.abs(pos.lat - lat) + Math.abs(pos.lng - lng)
+    if (dist < closestDist) {
+      closestDist = dist
+      closestMarker = marker
+    }
+  })
+
+  if (closestMarker) {
+    closestMarker.setIcon(createSOSIcon())
+    closestMarker.openPopup()
+  }
+}
 </script>
 
 <template>
   <div class="min-h-screen bg-[#fafaf7] flex flex-col">
 
     <!-- Header -->
-    <header class="bg-[#f7d686] border-b border-yellow-300 px-4 py-3 flex items-center justify-between drop-shadow-sm">
+    <header class="bg-[#f7d686] border-b border-yellow-300 px-4 pb-3 flex items-center justify-between drop-shadow-sm" style="padding-top: calc(env(safe-area-inset-top, 0px) + 12px);">
       <h1 class="text-sm font-black tracking-widest uppercase text-gray-800">WALKSENSE</h1>
 
       <div class="flex items-center gap-2">
@@ -347,7 +541,7 @@ const refreshLocations = () => {
             <h2 class="text-sm font-bold tracking-tight text-gray-800">{{ pwd.pwd_name }}</h2>
 
             <div class="flex items-center gap-2">
-              <span v-if="pwd.location && isPwdOnline(pwd.location.last_updated)" class="relative flex h-3 w-3">
+              <span v-if="pwd.location && isPwdOnline(pwd)" class="relative flex h-3 w-3">
                 <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                 <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
               </span>
@@ -355,18 +549,18 @@ const refreshLocations = () => {
 
               <span :class="[
                 'px-2 py-1 rounded-full text-xs font-semibold',
-                pwd.location && isPwdOnline(pwd.location.last_updated)
+                pwd.location && isPwdOnline(pwd)
                   ? 'bg-green-100 text-green-800'
                   : 'bg-gray-100 text-gray-800'
               ]">
-                {{ pwd.location && isPwdOnline(pwd.location.last_updated) ? 'Online' : 'Offline' }}
+                {{ pwd.location && isPwdOnline(pwd) ? 'Online' : 'Offline' }}
               </span>
             </div>
           </div>
 
           <div v-if="pwd.location">
             <p class="text-xs text-gray-500">
-              Last Updated: {{ formatLastUpdated(pwd.location.last_updated) }}
+              Last Updated: {{ formatLastUpdated(pwd) }}
             </p>
 
             <!-- Battery bar -->
@@ -403,12 +597,12 @@ const refreshLocations = () => {
             </div>
 
             <!-- Offline warning -->
-            <div v-if="!isPwdOnline(pwd.location.last_updated)"
+            <div v-if="!isPwdOnline(pwd)"
                  class="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded-lg flex items-start gap-2">
               <svg class="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
               </svg>
-              <p class="text-xs font-medium text-yellow-800">Device appears offline. Last location from {{ formatLastUpdated(pwd.location.last_updated) }}.</p>
+              <p class="text-xs font-medium text-yellow-800">Device appears offline. Last location from {{ formatLastUpdated(pwd) }}.</p>
             </div>
           </div>
           <div v-else>
@@ -431,7 +625,16 @@ const refreshLocations = () => {
           <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
           <h2 class="text-sm font-bold tracking-tight text-gray-800">Live Location Map</h2>
         </div>
-        <div ref="mapContainer" class="h-80 lg:h-96 bg-gray-200 rounded-xl overflow-hidden"></div>
+        <div class="relative h-80 lg:h-96 w-full rounded-xl overflow-hidden shadow-inner bg-gray-50">
+          <div ref="mapContainer" class="absolute inset-0 z-10"></div>
+          
+          <div v-if="isLocatingDistress" class="absolute top-4 left-1/2 -translate-x-1/2 z-[1000]">
+            <button @click="clearSOSView" 
+                    class="px-4 py-2 bg-white text-gray-800 font-bold text-xs tracking-wide rounded-full shadow-lg border border-gray-200 flex items-center gap-2 hover:bg-gray-50 transition-all">
+              <span class="text-red-500 text-sm leading-none">&times;</span> Return to Normal View
+            </button>
+          </div>
+        </div>
         <p class="text-[10px] font-medium tracking-wide uppercase text-gray-400 mt-2">
           Updates every 10 seconds • Click markers for details
         </p>
@@ -460,32 +663,70 @@ const refreshLocations = () => {
         <!-- Alert cards -->
         <div v-else class="space-y-3 max-h-80 overflow-y-auto pr-1">
           <div v-for="notif in notifications" :key="notif.id"
-               class="border border-red-200 bg-red-50 rounded-xl p-3 shadow-sm transition-all hover:shadow-md animate-fadeIn">
+               :class="[
+                 'rounded-xl p-3 shadow-sm transition-all hover:shadow-md animate-fadeIn border',
+                 isOldAlert(notif.triggered_at)
+                   ? 'border-gray-200 bg-gray-50'
+                   : 'border-red-200 bg-red-50'
+               ]">
             <div class="flex justify-between items-start">
               <div>
-                <h3 class="text-sm font-bold text-red-700 flex items-center gap-2">
-                  <svg class="w-4 h-4 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <h3 :class="[
+                  'text-sm font-bold flex items-center gap-2',
+                  isOldAlert(notif.triggered_at) ? 'text-gray-500' : 'text-red-700'
+                ]">
+                  <svg class="w-4 h-4" :class="isOldAlert(notif.triggered_at) ? 'text-gray-400' : 'text-red-600'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
                   </svg>
-                  Distress Signal
+                  {{ isOldAlert(notif.triggered_at) ? 'Past Alert' : 'Distress Signal' }}
                 </h3>
                 <p class="text-xs text-gray-600 font-medium tracking-wide mt-1">{{ notif.pwd?.user?.name || 'Your PWD' }}</p>
-                <p class="text-[10px] text-gray-400 mt-1 uppercase tracking-wide">{{ new Date(notif.triggered_at).toLocaleString() }}</p>
+                <p class="text-[10px] mt-1 uppercase tracking-wide" :class="isOldAlert(notif.triggered_at) ? 'text-gray-400' : 'text-red-400 font-semibold'">
+                  {{ formatAlertTime(notif.triggered_at) }}
+                </p>
+                <p v-if="getDistanceToNotif(notif)" class="text-[10px] text-gray-500 mt-0.5 font-medium">
+                  {{ getDistanceToNotif(notif) }} from you
+                </p>
               </div>
             </div>
 
             <div class="mt-3 flex gap-2">
-              <button @click="map && map.setView([notif.latitude, notif.longitude], 18)"
+              <button @click="locateDistressOnMap(notif)"
                       v-if="notif.latitude && notif.longitude"
-                      class="flex-1 py-1.5 px-3 text-xs font-semibold rounded-lg bg-red-600 text-white hover:bg-red-700 transition-colors">
+                      :class="[
+                        'flex-1 py-1.5 px-3 text-xs font-semibold rounded-lg transition-colors',
+                        isOldAlert(notif.triggered_at)
+                          ? 'bg-gray-500 text-white hover:bg-gray-600'
+                          : 'bg-red-600 text-white hover:bg-red-700'
+                      ]">
                 Locate on Map
               </button>
-              <button @click="deleteNotification(notif.id)"
+              <button @click="confirmDismiss(notif.id)"
                       class="py-1.5 px-3 text-xs font-medium rounded-lg text-gray-500 hover:text-red-700 hover:bg-red-100 transition-colors">
                 Dismiss
               </button>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dismiss Confirm Modal -->
+    <div v-if="showDismissConfirm" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-[9998]" @click="cancelDismiss"></div>
+    <div v-if="showDismissConfirm" class="fixed inset-0 flex items-center justify-center z-[9999]">
+      <div class="bg-white rounded-2xl shadow-xl ring-1 ring-black/5 p-6 w-80 animate-fadeIn">
+        <div class="flex items-center gap-3 mb-4">
+          <div class="w-10 h-10 rounded-full bg-red-100 flex items-center justify-center shrink-0">
+            <svg class="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+          </div>
+          <h3 class="text-lg font-bold text-gray-800">Dismiss Alert?</h3>
+        </div>
+        <p class="text-sm text-gray-600 mb-6">Are you sure you want to dismiss this emergency alert? This action cannot be undone.</p>
+        <div class="flex justify-end gap-3">
+          <button @click="cancelDismiss" class="px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium text-sm">Keep Alert</button>
+          <button @click="deleteNotification(showDismissConfirm)" class="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-semibold text-sm">Dismiss</button>
         </div>
       </div>
     </div>
@@ -513,5 +754,17 @@ const refreshLocations = () => {
   to   { opacity: 1; transform: scale(1); }
 }
 .animate-fadeIn { animation: fadeIn 0.2s ease-out; }
+
+@keyframes sonarPulse {
+  0%   { transform: scale(0.5); opacity: 0.8; }
+  100% { transform: scale(2.5); opacity: 0; }
+}
+.sonar-pulse {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: rgba(220, 38, 38, 0.3);
+  animation: sonarPulse 1.5s ease-out infinite;
+}
 </style>
 

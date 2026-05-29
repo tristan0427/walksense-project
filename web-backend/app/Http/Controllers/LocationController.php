@@ -156,10 +156,16 @@ class LocationController extends Controller
         foreach ($pwds as $pwd) {
             $currentLocation = CurrentLocation::where('user_id', $pwd->user_id)->first();
 
+            $secondsAgo = null;
+            if ($currentLocation && $currentLocation->last_updated) {
+                $secondsAgo = now()->diffInSeconds($currentLocation->last_updated);
+            }
+
             $pwdLocations[] = [
                 'pwd_id' => $pwd->user_id,
                 'pwd_name' => $pwd->firstname . ' ' . $pwd->lastname,
                 'location' => $currentLocation,
+                'seconds_ago' => $secondsAgo,
             ];
         }
         return response()->json([

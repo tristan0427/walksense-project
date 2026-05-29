@@ -101,8 +101,30 @@ class LocationService {
             if (this.debugLogs) {
                 console.log('Background tracking started with ID:', this.watcherId);
             }
-        } catch (error) {
-            console.error('Failed to start tracking:', error);
+        } catch (error: any) {
+            console.error('Failed to start background tracking:', error);
+
+            // Attempt foreground-only fallback if background permission was denied
+            // or the background plugin threw for any reason on native
+            const msg = (error?.message || '').toLowerCase();
+            const code = error?.code || '';
+            const isPermissionIssue = code === 'NOT_AUTHORIZED'
+                || msg.includes('permission')
+                || msg.includes('denied')
+                || msg.includes('not_authorized');
+
+            if (isPermissionIssue) {
+                console.warn('Background tracking denied — falling back to foreground tracking');
+                try {
+                    await this.startBrowserTracking();
+                    return; // foreground fallback succeeded
+                } catch (fallbackError) {
+                    console.error('Foreground fallback also failed:', fallbackError);
+                    this.isTracking = false;
+                    throw fallbackError;
+                }
+            }
+
             this.isTracking = false;
             throw error;
         }

@@ -162,7 +162,7 @@ const resetAndReprovision = async () => {
   <div class="min-h-screen bg-gray-100 flex flex-col">
 
     <!-- Header -->
-    <header class="bg-[#f7d686] shadow-md px-4 py-3 flex items-center gap-3">
+    <header class="bg-[#f7d686] shadow-md px-4 pb-3 flex items-center gap-3" style="padding-top: calc(env(safe-area-inset-top, 0px) + 12px);">
       <button @click="router.push('/pwd-dashboard')" class="flex items-center justify-center p-2 -ml-2 text-gray-700 hover:bg-black/5 rounded-full transition" aria-label="Go back">
         <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
           <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />

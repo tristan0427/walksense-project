@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router'
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
 import { CapacitorHttp } from '@capacitor/core';
+import { App } from '@capacitor/app';
 import LocationService from "../services/LocationService";
 import ObjectDetection from "../types/ObjectDetection";
 import axios from "axios";
@@ -17,6 +18,18 @@ const router = useRouter();
 const isTracking = ref(false);
 const currentLocation = ref(null);
 const error = ref('');
+
+const isNetworkOnline = ref(navigator.onLine);
+const updateNetworkStatus = () => {
+  isNetworkOnline.value = navigator.onLine;
+};
+
+// ── GPS Retry Config ─────────────────────────────────────────────────────────
+const GPS_MAX_RETRIES = 10;
+const GPS_RETRY_INTERVALS = [3000, 5000, 5000, 10000, 10000, 15000, 15000, 20000, 30000, 30000];
+const gpsRetryCount = ref(0);
+let gpsRetryTimer = null;
+let appStateListener = null;
 const user = ref(null);
 const guardian = ref(null);
 const menuOpen = ref(false);
@@ -53,7 +66,7 @@ const SUSTAINED_MS   = 3000;
 const luxBuffer      = [];
 let sustainedSince   = null;
 let sustainedTarget  = null;
-const showIpSetup = ref(false);
+
 
 // ── Camera Fault Tolerance ────────────────────────────────────────────────────
 const OFFLINE_FAILURE_THRESHOLD = 5;
@@ -64,6 +77,9 @@ let nightReconnectTimeout = null;
 
 const isSendingDistress = ref(false);
 const distressSent = ref(false);
+const distressFailed = ref(false);
+const distressErrorMessage = ref('');
+const isDistressSpeaking = ref(false);
 
 // ── Detection state ──────────────────────────────────────────────────────────
 const nearestObject     = ref(null);
@@ -71,18 +87,14 @@ const detectionInterval = ref(null);
 const lastSpokenTime    = ref(0);
 const isSpeaking        = ref(false);
 const currentSpokenClass = ref(null);
+const isPathClearAnnounced = ref(false);
+let clearPathSince = null;
 
 // ── Demo Mode ────────────────────────────────────────────────────────────────
 // Shows camera preview + bounding box overlay when ON. Zero overhead when OFF.
 const demoMode = ref(false);
 const previewCanvas = ref(null);
 let previewListener = null;
-
-// NOTE: runtimeMode and cameraFrame have been removed.
-// Base64 frame encoding is permanently disabled in the native plugin.
-// The Camera Preview block has been removed from the template.
-// Use Android Studio Logcat for debugging — filter by tag "ObjectDetection"
-// to see [Perf] metrics and detection output on every 20th call.
 
 const perfMetrics = ref({
   detectCalls: 0,
@@ -109,38 +121,7 @@ const TIER_COOLDOWN_MS = {
 
 const lastSpokenByClass = new Map();
 
-// ── IP Setup form ────────────────────────────────────────────────────────────
-const ipFormDay   = ref(dayCamIp.value);
-const ipFormNight = ref(nightCamIp.value);
-const ipSaveError = ref('');
 
-const saveIps = async () => {
-  const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
-
-  if (!ipRegex.test(ipFormDay.value.trim())) {
-    ipSaveError.value = 'Please enter a valid Day Camera IP (e.g. 192.168.43.101)';
-    return;
-  }
-
-  if (ipFormNight.value.trim() && !ipRegex.test(ipFormNight.value.trim())) {
-    ipSaveError.value = 'Night Camera IP is invalid (e.g. 192.168.43.102)';
-    return;
-  }
-
-  ipSaveError.value = '';
-  dayCamIp.value   = ipFormDay.value.trim();
-  nightCamIp.value = ipFormNight.value.trim();
-
-  localStorage.setItem('dayCamIp', dayCamIp.value);
-  if (nightCamIp.value) {
-    localStorage.setItem('nightCamIp', nightCamIp.value);
-  } else {
-    localStorage.removeItem('nightCamIp');
-  }
-
-  showIpSetup.value = false;
-  await connectBothCameras();
-};
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 onMounted(async () => {
@@ -148,6 +129,8 @@ onMounted(async () => {
 
   history.pushState(null, '', window.location.href);
   window.addEventListener('popstate', handleBackButton);
+  window.addEventListener('online', updateNetworkStatus);
+  window.addEventListener('offline', updateNetworkStatus);
 
   ObjectDetection.addListener('dayCamConnected', () => {
     dayCamConnected.value = true;
@@ -213,14 +196,35 @@ onMounted(async () => {
     startEmergencyPolling();
   }
 
+  // Listen for app resume to re-check GPS (e.g. user toggled Location in settings)
+  try {
+    appStateListener = await App.addListener('appStateChange', async ({ isActive }) => {
+      if (isActive && !isTracking.value) {
+        console.log('App resumed — retrying GPS tracking…');
+        clearGpsRetryTimer();
+        gpsRetryCount.value = 0;
+        await startTracking();
+      }
+    });
+  } catch (e) {
+    console.log('App state listener not available (browser mode)');
+  }
+
   await startTracking();
 });
 
 onUnmounted(async () => {
   window.removeEventListener('popstate', handleBackButton);
+  window.removeEventListener('online', updateNetworkStatus);
+  window.removeEventListener('offline', updateNetworkStatus);
   stopDetection();
   stopLuxPolling();
   stopEmergencyPolling();
+  clearGpsRetryTimer();
+  if (appStateListener) {
+    appStateListener.remove();
+    appStateListener = null;
+  }
   if (dayReconnectTimeout)   clearTimeout(dayReconnectTimeout);
   if (nightReconnectTimeout) clearTimeout(nightReconnectTimeout);
   // Kill demo preview if still active
@@ -458,7 +462,12 @@ const sendDistressSignal = async (source = 'app_button') => {
   if (isSendingDistress.value) return;
 
   isSendingDistress.value = true;
+  distressFailed.value = false;
+  distressErrorMessage.value = '';
+
+  isDistressSpeaking.value = true;
   try { await TextToSpeech.speak({ text: 'Sending emergency signal.', lang: 'en-US' }); } catch (e) {}
+  isDistressSpeaking.value = false;
 
   try {
     let lat = null;
@@ -487,18 +496,43 @@ const sendDistressSignal = async (source = 'app_button') => {
       distressSent.value = false;
     }, 4000);
 
+    isDistressSpeaking.value = true;
     try {
       await TextToSpeech.speak({
         text: 'Emergency distress signal sent to your guardian.',
         lang: 'en-US',
       });
     } catch (e) {}
+    isDistressSpeaking.value = false;
 
   } catch (err) {
     console.error('Failed to send distress signal:', err);
-    error.value = 'Failed to send distress signal: ' + (err.response?.data?.message || err.message);
+
+    let spokenError;
+    const msg = err.message || '';
+    const status = err.response?.status;
+
+    if (msg.includes('Network Error') || !status) {
+      spokenError = 'Failed to send distress signal. Please check your internet connection and try again.';
+    } else if (status === 500) {
+      spokenError = 'Failed to send distress signal. The server is currently unavailable. Please try again later.';
+    } else if (status === 401 || status === 403) {
+      spokenError = 'Failed to send distress signal. Your session may have expired. Please log in again.';
+    } else {
+      spokenError = 'Failed to send distress signal. An unknown error occurred. Please try again.';
+    }
+
+    distressFailed.value = true;
+    distressErrorMessage.value = spokenError;
+    setTimeout(() => { distressFailed.value = false; }, 8000);
+
+    isDistressSpeaking.value = true;
+    try { await TextToSpeech.speak({ text: spokenError, lang: 'en-US' }); } catch (e) {}
+    isDistressSpeaking.value = false;
+
   } finally {
     isSendingDistress.value = false;
+    isDistressSpeaking.value = false;
   }
 };
 
@@ -513,14 +547,14 @@ const startDetection = () => {
   console.log('Starting detection loop');
   detectionInterval.value = setInterval(async () => {
     try {
-      // NOTE: includeFrame is permanently removed.
-      // Passing it would have no effect — the native plugin ignores it.
       const result = await ObjectDetection.detectFromStream({ confidence: 0.317 });
 
       updatePerfMetrics(result.metrics);
       const now = Date.now();
 
       if (result.nearest) {
+        isPathClearAnnounced.value = false;
+        clearPathSince = null;
         nearestObject.value = result.nearest;
 
         const { class: objClass, distance, direction } = result.nearest;
@@ -532,7 +566,7 @@ const startDetection = () => {
         const imminentCanSpeak = (now - lastClassSpokenAt) >= IMMINENT_COOLDOWN_MS;
         const shouldHandleTTS = isImminent ? imminentCanSpeak : canSpeak;
 
-        if (shouldHandleTTS) {
+        if (shouldHandleTTS && !isDistressSpeaking.value) {
           const shouldSpeak = shouldSpeakAlert(tier, direction, distance, isImminent);
 
           if (shouldSpeak) {
@@ -583,8 +617,31 @@ const startDetection = () => {
         }
       } else {
         nearestObject.value = null;
-      }
 
+        if (clearPathSince === null) {
+          clearPathSince = Date.now();
+        }
+
+        const elapsedClearTime = Date.now() - clearPathSince;
+        if (elapsedClearTime >= 1500) {
+          if (!isPathClearAnnounced.value && !isSpeaking.value && !isDistressSpeaking.value) {
+            isSpeaking.value = true;
+            isPathClearAnnounced.value = true;
+            TextToSpeech.speak({
+              text: 'Path clear',
+              lang: 'en-US',
+              rate: 1.0,
+              pitch: 1.0,
+              volume: 1.0
+            }).catch((ttsError) => {
+              console.error('TTS error:', ttsError);
+              isPathClearAnnounced.value = false;
+            }).finally(() => {
+              isSpeaking.value = false;
+            });
+          }
+        }
+      }
     } catch (err) {
       if (!err.message?.includes('No valid')) {
         console.error('Detection error:', err);
@@ -598,6 +655,8 @@ const startDetection = () => {
 const stopDetection = () => {
   if (detectionInterval.value) clearInterval(detectionInterval.value);
   detectionInterval.value = null;
+  isPathClearAnnounced.value = false;
+  clearPathSince = null;
 };
 
 const getClassTier = (className) => {
@@ -640,23 +699,56 @@ const startTracking = async () => {
     error.value = '';
     await LocationService.startTracking();
     isTracking.value = true;
+    gpsRetryCount.value = 0;
+    clearGpsRetryTimer();
     const position = await LocationService.getCurrentLocation();
     currentLocation.value = position.coords;
   } catch (err) {
     console.error('Tracking error:', err);
-    setTimeout(async () => {
-      try {
-        await LocationService.startTracking();
-        isTracking.value = true;
-        const position = await LocationService.getCurrentLocation();
-        currentLocation.value = position.coords;
-        error.value = '';
-      } catch (retryErr) {
-        error.value = 'GPS unavailable. Please enable Location/GPS in your phone settings.';
-        isTracking.value = false;
-      }
-    }, 5000);
+    isTracking.value = false;
+    scheduleGpsRetry();
   }
+};
+
+const scheduleGpsRetry = () => {
+  if (gpsRetryCount.value >= GPS_MAX_RETRIES) {
+    error.value = 'GPS unavailable after multiple attempts. Please enable Location/GPS in your phone settings and tap Retry.';
+    return;
+  }
+
+  const delay = GPS_RETRY_INTERVALS[Math.min(gpsRetryCount.value, GPS_RETRY_INTERVALS.length - 1)];
+  const secondsLeft = Math.round(delay / 1000);
+  error.value = `GPS connecting… attempt ${gpsRetryCount.value + 1}/${GPS_MAX_RETRIES} (retrying in ${secondsLeft}s)`;
+
+  gpsRetryTimer = setTimeout(async () => {
+    gpsRetryCount.value++;
+    try {
+      await LocationService.startTracking();
+      isTracking.value = true;
+      error.value = '';
+      gpsRetryCount.value = 0;
+      const position = await LocationService.getCurrentLocation();
+      currentLocation.value = position.coords;
+    } catch (retryErr) {
+      console.warn(`GPS retry ${gpsRetryCount.value} failed:`, retryErr.message || retryErr);
+      isTracking.value = false;
+      scheduleGpsRetry();
+    }
+  }, delay);
+};
+
+const clearGpsRetryTimer = () => {
+  if (gpsRetryTimer) {
+    clearTimeout(gpsRetryTimer);
+    gpsRetryTimer = null;
+  }
+};
+
+const retryTracking = async () => {
+  clearGpsRetryTimer();
+  gpsRetryCount.value = 0;
+  error.value = '';
+  await startTracking();
 };
 
 const stopTracking = async () => {
@@ -777,7 +869,7 @@ const drawFpsOverlay = (ctx) => {
   <div class="min-h-screen bg-[#fafaf7] flex flex-col">
 
     <!-- Header -->
-    <header class="bg-[#f7d686] border-b border-yellow-300 px-4 py-3 flex items-center justify-between drop-shadow-sm">
+    <header class="bg-[#f7d686] border-b border-yellow-300 px-4 pb-3 flex items-center justify-between drop-shadow-sm" style="padding-top: calc(env(safe-area-inset-top, 0px) + 12px);">
       <div class="flex items-center gap-2">
         <h1 class="text-sm font-black tracking-widest uppercase text-gray-800">WALKSENSE</h1>
         <span v-if="demoMode" class="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-amber-500 text-white animate-pulse">DEMO</span>
@@ -818,52 +910,7 @@ const drawFpsOverlay = (ctx) => {
       <button @click="logout" class="block w-full text-left px-4 py-3 text-red-600 font-semibold hover:bg-red-50 text-sm border-t border-gray-100">Logout</button>
     </div>
 
-    <!-- IP Setup Modal -->
-    <div v-if="showIpSetup" class="fixed inset-0 bg-black/50 z-50 flex items-center justify-center px-4">
-      <div class="bg-white rounded-2xl shadow-xl p-6 w-full max-w-sm ring-1 ring-black/5">
-        <h3 class="text-lg font-bold text-gray-800 mb-1">Camera Setup</h3>
-        <p class="text-xs text-gray-500 mb-4">
-          Enter the IP addresses after the boards connect to your hotspot.
-        </p>
 
-        <div class="space-y-4">
-          <div>
-            <label class="flex items-center gap-1.5 text-sm font-semibold text-gray-700 mb-1">
-              <svg class="w-4 h-4 text-yellow-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
-              </svg>
-              Day Camera IP
-            </label>
-            <input v-model="ipFormDay" type="text" placeholder="e.g. 192.168.43.101"
-                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400"/>
-          </div>
-
-          <div>
-            <label class="flex items-center gap-1.5 text-sm font-semibold text-gray-700 mb-1">
-              <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
-              </svg>
-              Night Camera IP
-            </label>
-            <input v-model="ipFormNight" type="text" placeholder="e.g. 192.168.43.102"
-                   class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-yellow-400"/>
-          </div>
-
-          <p v-if="ipSaveError" class="text-xs text-red-600">{{ ipSaveError }}</p>
-
-          <div class="flex gap-3 pt-1">
-            <button v-if="dayCamIp" @click="showIpSetup = false"
-                    class="flex-1 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium">
-              Cancel
-            </button>
-            <button @click="saveIps"
-                    class="flex-1 py-2 rounded-lg bg-yellow-400 hover:bg-yellow-500 text-gray-900 font-semibold text-sm">
-              Connect Cameras
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
 
     <!-- Main Content -->
     <div class="p-4 space-y-4">
@@ -876,8 +923,10 @@ const drawFpsOverlay = (ctx) => {
         <div>
           <h2 class="text-lg font-bold text-gray-800">Hello, {{ user?.name || 'User' }}</h2>
           <div class="flex items-center gap-1.5 mt-0.5">
-            <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-            <p class="text-xs font-medium text-gray-600">Online</p>
+            <span :class="['w-2 h-2 rounded-full', isNetworkOnline ? 'bg-green-500 animate-pulse' : 'bg-red-500']"></span>
+            <p class="text-xs font-medium text-gray-600">
+              {{ isNetworkOnline ? 'Online' : 'Offline (No Connection)' }}
+            </p>
           </div>
         </div>
       </div>
@@ -888,10 +937,17 @@ const drawFpsOverlay = (ctx) => {
           <svg class="w-5 h-5 text-red-500 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
           </svg>
-          <div>
+          <div class="flex-1">
             <p class="text-sm font-bold">Tracking Error</p>
             <p class="text-xs font-medium mt-1">{{ error }}</p>
             <p class="text-xs text-red-600 mt-1">Check your location permissions and GPS settings.</p>
+            <button @click="retryTracking"
+                    class="mt-2 px-3 py-1.5 bg-red-600 hover:bg-red-700 active:scale-95 text-white text-xs font-semibold rounded-lg transition-all flex items-center gap-1.5">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+              </svg>
+              Retry GPS Tracking
+            </button>
           </div>
         </div>
       </div>
@@ -997,15 +1053,7 @@ const drawFpsOverlay = (ctx) => {
           </span>
         </div>
 
-        <!-- Settings button -->
-        <button @click="showIpSetup = true"
-                class="w-full mt-1 py-2 text-xs rounded-lg border border-gray-200 text-gray-500 hover:bg-gray-50 font-medium flex items-center justify-center gap-1.5 transition">
-          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
-          </svg>
-          Change Camera IPs
-        </button>
+
       </div>
 
       <!-- NOTE: Camera Preview block removed.
@@ -1137,15 +1185,39 @@ const drawFpsOverlay = (ctx) => {
         </div>
       </div>
 
-      <!-- Distress Flash -->
-      <div v-if="distressSent" class="fixed top-20 left-4 right-4 bg-red-100 border-l-4 border-red-600 text-red-800 p-4 rounded-r-xl shadow-xl z-50 animate-fadeIn">
+      <!-- Distress: Sending -->
+      <div v-if="isSendingDistress" class="fixed top-20 left-4 right-4 bg-amber-100 border-l-4 border-amber-500 text-amber-800 p-4 rounded-r-xl shadow-xl z-50 animate-fadeIn">
         <div class="flex items-start gap-3">
-          <svg class="w-5 h-5 text-red-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div class="w-5 h-5 border-2 border-amber-500 border-t-transparent rounded-full animate-spin shrink-0 mt-0.5"></div>
+          <div>
+            <p class="font-bold text-sm">Sending Distress Signal…</p>
+            <p class="text-xs mt-0.5">Please wait while we notify your guardian.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Distress: Sent -->
+      <div v-if="distressSent && !isSendingDistress" class="fixed top-20 left-4 right-4 bg-green-100 border-l-4 border-green-600 text-green-800 p-4 rounded-r-xl shadow-xl z-50 animate-fadeIn">
+        <div class="flex items-start gap-3">
+          <svg class="w-5 h-5 text-green-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
           </svg>
           <div>
             <p class="font-bold text-sm">Distress Signal Sent!</p>
             <p class="text-xs mt-0.5">Your guardian has been notified of your location.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Distress: Failed -->
+      <div v-if="distressFailed && !isSendingDistress" class="fixed top-20 left-4 right-4 bg-red-100 border-l-4 border-red-600 text-red-800 p-4 rounded-r-xl shadow-xl z-50 animate-fadeIn">
+        <div class="flex items-start gap-3">
+          <svg class="w-5 h-5 text-red-600 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+          </svg>
+          <div>
+            <p class="font-bold text-sm">Failed to Send Signal</p>
+            <p class="text-xs mt-0.5">{{ distressErrorMessage }}</p>
           </div>
         </div>
       </div>

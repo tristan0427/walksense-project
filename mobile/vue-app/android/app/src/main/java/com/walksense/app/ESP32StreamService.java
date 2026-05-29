@@ -28,19 +28,15 @@ public class ESP32StreamService {
     private Socket socket;
 
     /**
-     * @param host    IP address or mDNS hostname (e.g. "walksense-day.local")
-     * @param context Android context — needed for NsdManager mDNS resolution
+     * @param host    IP address or mDNS hostname
+     * @param context Android context needed for NsdManager mDNS resolution
      */
     public ESP32StreamService(String host, Context context) {
         this.host = host;
         this.context = context;
     }
 
-    /**
-     * Legacy constructor for backward compatibility — context-free.
-     * mDNS resolution will fall back to InetAddress.getByName() which
-     * works on many Android devices but is not guaranteed.
-     */
+
     public ESP32StreamService(String host) {
         this.host = host;
         this.context = null;
@@ -52,13 +48,7 @@ public class ESP32StreamService {
         void onConnected();
     }
 
-    /**
-     * Resolves a hostname to an IP address string.
-     * For .local mDNS hostnames, tries InetAddress resolution first
-     * (works on Android 12+ and many earlier devices), then falls back
-     * to NsdManager if context is available.
-     * For plain IPs, returns them directly with no resolution needed.
-     */
+
     private String resolveHost(String hostname) {
         // Plain IP — no resolution needed
         if (hostname.matches("\\d+\\.\\d+\\.\\d+\\.\\d+")) {
