@@ -10,14 +10,33 @@ const router = useRouter()
 
 const alertSound = new Audio('/alert.mp3')
 
+const startVibrationLoop = () => {
+  if (!navigator.vibrate) return
+  if (vibrationInterval.value) clearInterval(vibrationInterval.value)
+  navigator.vibrate([1000, 500, 1000, 500])
+  vibrationInterval.value = setInterval(() => {
+    if (navigator.vibrate) navigator.vibrate([1000, 500, 1000, 500])
+  }, 3000)
+}
+
 const triggerEmergencyAlarm = () => {
-  if (navigator.vibrate) {
-    navigator.vibrate([500, 200, 500, 200, 1000])
-  }
+  alertSound.loop = true
   alertSound.currentTime = 0
   alertSound.play().catch(e => {
-    console.warn('Audio play blocked by browser policy (user must tap screen first):', e)
+    console.warn('Audio play blocked by browser policy:', e)
   })
+  startVibrationLoop()
+}
+
+const stopEmergencyAlarm = () => {
+  alertSound.loop = false
+  alertSound.pause()
+  alertSound.currentTime = 0
+  if (vibrationInterval.value) {
+    clearInterval(vibrationInterval.value)
+    vibrationInterval.value = null
+  }
+  if (navigator.vibrate) navigator.vibrate(0)
 }
 const menuOpen = ref(false)
 
@@ -43,6 +62,8 @@ const guardianProfile = ref(null)
 const distressPulseMarker = ref(null)
 const showDismissConfirm = ref(null)
 const guardianLocation = ref(null)
+const activeDistressNotif = ref(null)
+const vibrationInterval = ref(null)
 
 const normalIcon = L.icon({
   iconUrl: markerPinUrl,
@@ -80,6 +101,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (updateInterval.value) clearInterval(updateInterval.value)
+  if (vibrationInterval.value) clearInterval(vibrationInterval.value)
   window.removeEventListener('popstate', handleBackButton)
 })
 
@@ -170,14 +192,14 @@ const loadNotifications = async () => {
   try {
     const response = await axios.get('/api/notifications')
     const fetchedNotifs = response.data.notifications
-    
-    // Check for new emergency alerts
+
     if (fetchedNotifs && fetchedNotifs.length > 0) {
-      // Find the highest ID which represents the newest notification
       const newestId = Math.max(...fetchedNotifs.map(n => n.id))
       const lastAlertedId = parseInt(localStorage.getItem('last_alerted_id') || '0')
-      
+
       if (newestId > lastAlertedId) {
+        const newestNotif = fetchedNotifs.find(n => n.id === newestId)
+        if (newestNotif) activeDistressNotif.value = newestNotif
         triggerEmergencyAlarm()
         localStorage.setItem('last_alerted_id', newestId.toString())
       }
@@ -220,6 +242,18 @@ const deleteNotification = async (id) => {
   } catch (err) {
     console.error('Failed to delete notification:', err)
   }
+}
+
+const handleStopAndLocate = (notif) => {
+  stopEmergencyAlarm()
+  activeDistressNotif.value = null
+  locateDistressOnMap(notif)
+}
+
+const handleStopAndDismiss = async (notifId) => {
+  stopEmergencyAlarm()
+  activeDistressNotif.value = null
+  await deleteNotification(notifId)
 }
 
 const updateMapMarkers = () => {
@@ -731,6 +765,46 @@ const locateDistressOnMap = (notif) => {
       </div>
     </div>
 
+    <!-- Distress Popup Modal -->
+    <Transition name="fade">
+      <div v-if="activeDistressNotif" class="fixed inset-0 bg-black/60 backdrop-blur-md z-[10000] flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl shadow-2xl ring-2 ring-red-500/20 max-w-sm w-full p-6 text-center flex flex-col items-center animate-popup-in">
+
+          <div class="relative flex items-center justify-center w-28 h-28 mb-5">
+            <div class="absolute w-24 h-24 rounded-full bg-red-500/20 animate-popup-sonar"></div>
+            <div class="absolute w-24 h-24 rounded-full bg-red-500/10 animate-popup-sonar" style="animation-delay: 0.75s"></div>
+            <div class="relative w-16 h-16 rounded-full bg-red-600 border-4 border-white shadow-lg flex items-center justify-center z-10 animate-bounce-slow">
+              <span class="text-white text-3xl font-black select-none">!</span>
+            </div>
+          </div>
+
+          <span class="px-3 py-1 rounded-full bg-red-100 text-red-700 text-xs font-black uppercase tracking-wider mb-2 animate-pulse">
+            EMERGENCY SOS
+          </span>
+
+          <h3 class="text-xl font-black text-gray-800 tracking-tight">Distress Signal Received</h3>
+
+          <p class="text-base font-bold text-gray-700 mt-2">
+            {{ activeDistressNotif.pwd?.user?.name || 'Your PWD' }}
+          </p>
+
+          <p v-if="getDistanceToNotif(activeDistressNotif)" class="text-xs font-semibold text-gray-400 mt-1">
+            &#x1F4CD; {{ getDistanceToNotif(activeDistressNotif) }} from your location
+          </p>
+
+          <div class="w-full mt-6 flex flex-col gap-2.5">
+            <button @click="navigateToPwd(parseFloat(activeDistressNotif.latitude), parseFloat(activeDistressNotif.longitude), $event), handleStopAndLocate(activeDistressNotif)"
+                    v-if="activeDistressNotif.latitude && activeDistressNotif.longitude"
+                    class="w-full py-3.5 px-4 bg-red-600 hover:bg-red-700 text-white font-bold text-sm rounded-xl shadow-lg shadow-red-600/20 active:scale-[0.98] transition-all flex items-center justify-center gap-2">
+              Locate on Map
+            </button>
+
+          </div>
+
+        </div>
+      </div>
+    </Transition>
+
     <!-- Logout overlay -->
     <div v-if="showLogoutConfirm" class="fixed inset-0 bg-black/40 backdrop-blur-sm z-[9998]"></div>
     <div v-if="showLogoutConfirm" class="fixed inset-0 flex items-center justify-center z-[9999]">
@@ -766,5 +840,37 @@ const locateDistressOnMap = (notif) => {
   background: rgba(220, 38, 38, 0.3);
   animation: sonarPulse 1.5s ease-out infinite;
 }
-</style>
 
+@keyframes popupSonar {
+  0% { transform: scale(0.6); opacity: 0.9; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.animate-popup-sonar {
+  animation: popupSonar 2s cubic-bezier(0.16, 1, 0.3, 1) infinite;
+}
+
+@keyframes bounceSlow {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+.animate-bounce-slow {
+  animation: bounceSlow 2s ease-in-out infinite;
+}
+
+@keyframes popupIn {
+  from { opacity: 0; transform: scale(0.9) translateY(20px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.animate-popup-in {
+  animation: popupIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.25s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+</style>
