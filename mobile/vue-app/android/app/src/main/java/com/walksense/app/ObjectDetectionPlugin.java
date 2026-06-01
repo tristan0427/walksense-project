@@ -101,9 +101,10 @@ public class ObjectDetectionPlugin extends Plugin {
     private volatile boolean demoModeActive = false;
 
     // ===== Temporal Tracking (close-proximity misclassification fix) =====
-    private static final int CLASS_HISTORY_SIZE = 5;
-    private final List<String> classHistory = new ArrayList<>();
-    private final List<Float>  ratioHistory = new ArrayList<>();
+    private static final int CLASS_HISTORY_SIZE = 12;
+    private final List<String> classHistory   = new ArrayList<>();
+    private final List<Float>  ratioHistory   = new ArrayList<>();
+    private final List<Float>  centerXHistory = new ArrayList<>();
     private static final float IMMINENT_OCCUPANCY_THRESHOLD = 0.85f;
     private static final float TEMPORAL_OVERRIDE_THRESHOLD  = 0.60f;
 
@@ -178,13 +179,43 @@ public class ObjectDetectionPlugin extends Plugin {
         return null;
     }
 
-    private void pushClassHistory(String className, float bboxRatio) {
+    private void pushClassHistory(String className, float bboxRatio, float centerX) {
         classHistory.add(className);
         ratioHistory.add(bboxRatio);
+        centerXHistory.add(centerX);
         while (classHistory.size() > CLASS_HISTORY_SIZE) {
             classHistory.remove(0);
             ratioHistory.remove(0);
+            centerXHistory.remove(0);
         }
+    }
+
+    // ===== Stationary Detection =====
+    private static final int   STABILITY_MIN_FRAMES    = 10;
+    private static final float STABILITY_RATIO_DELTA   = 0.05f;
+    private static final float STABILITY_CENTERX_DELTA = 25.0f;
+
+    private boolean isDetectionStable(String currentClass) {
+        if (classHistory.size() < STABILITY_MIN_FRAMES) return false;
+
+        int recentSize = classHistory.size();
+        List<String> recentClasses  = classHistory.subList(recentSize - STABILITY_MIN_FRAMES, recentSize);
+        List<Float>  recentRatios   = ratioHistory.subList(recentSize - STABILITY_MIN_FRAMES, recentSize);
+        List<Float>  recentCenterXs = centerXHistory.subList(recentSize - STABILITY_MIN_FRAMES, recentSize);
+
+        for (String cls : recentClasses) {
+            if (!cls.equals(currentClass)) return false;
+        }
+
+        float minRatio = Collections.min(recentRatios);
+        float maxRatio = Collections.max(recentRatios);
+        if ((maxRatio - minRatio) > STABILITY_RATIO_DELTA) return false;
+
+        float minX = Collections.min(recentCenterXs);
+        float maxX = Collections.max(recentCenterXs);
+        if ((maxX - minX) > STABILITY_CENTERX_DELTA) return false;
+
+        return true;
     }
 
     private String getDirection(float centerX, int frameWidth) {
@@ -194,6 +225,31 @@ public class ObjectDetectionPlugin extends Plugin {
         else if (centerX > rightThird) return "right side";
         else return "ahead";
     }
+
+    // ===== Avoidance Guidance =====
+    private static final float AVOIDANCE_MIN_CLEAR_PX = 50.0f;  // ~15% of 320px frame
+    private static final float AVOIDANCE_BLOCKED_PX   = 30.0f;  // ~10% of 320px frame
+
+    private String getAvoidanceDirection(float x1, float x2, int frameWidth) {
+        float leftClear  = x1;                    // gap from left edge to obstacle
+        float rightClear = frameWidth - x2;       // gap from obstacle to right edge
+
+        boolean leftOpen  = leftClear  > AVOIDANCE_MIN_CLEAR_PX;
+        boolean rightOpen = rightClear > AVOIDANCE_MIN_CLEAR_PX;
+
+        if (leftOpen && rightOpen) {
+            // Both sides have room — suggest the side with MORE space
+            if (leftClear > rightClear + 30) return "left";
+            if (rightClear > leftClear + 30) return "right";
+            return "both";  // roughly equal room on both sides
+        }
+        if (leftOpen)  return "left";
+        if (rightOpen) return "right";
+
+        // Both sides below threshold — obstacle fills the frame width
+        return "blocked";
+    }
+
 
     // ===== Model Loading =====
 
@@ -538,8 +594,11 @@ public class ObjectDetectionPlugin extends Plugin {
 
                     String distance  = imminent ? "imminent" : estimateDistance(bboxArea, frameArea);
                     String direction = getDirection((nearest.x1 + nearest.x2) / 2, INPUT_SIZE);
+                    String avoidance = getAvoidanceDirection(nearest.x1, nearest.x2, INPUT_SIZE);
+                    float  centerX   = (nearest.x1 + nearest.x2) / 2f;
+                    boolean stable   = isDetectionStable(nearest.className);
 
-                    pushClassHistory(nearest.className, bboxRatio);
+                    pushClassHistory(nearest.className, bboxRatio, centerX);
 
                     JSObject nearestObj = new JSObject();
                     nearestObj.put("class",      nearest.className);
@@ -548,6 +607,8 @@ public class ObjectDetectionPlugin extends Plugin {
                     nearestObj.put("confidence", nearest.confidence);
                     nearestObj.put("camera",     activeCamera);
                     nearestObj.put("imminent",   imminent);
+                    nearestObj.put("avoidance",  avoidance);
+                    nearestObj.put("stable",     stable);
                     // Bounding box coordinates for demo mode canvas overlay
                     nearestObj.put("x1", nearest.x1);
                     nearestObj.put("y1", nearest.y1);
@@ -556,7 +617,7 @@ public class ObjectDetectionPlugin extends Plugin {
 
                     ret.put("nearest", nearestObj);
                 } else {
-                    pushClassHistory("none", 0f);
+                    pushClassHistory("none", 0f, 0f);
                 }
 
                 ret.put("success", true);

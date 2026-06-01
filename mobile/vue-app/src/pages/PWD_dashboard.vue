@@ -89,6 +89,7 @@ const isSpeaking        = ref(false);
 const currentSpokenClass = ref(null);
 const isPathClearAnnounced = ref(false);
 let clearPathSince = null;
+const stationaryAnnouncedClasses = new Set();
 
 // ── Demo Mode ────────────────────────────────────────────────────────────────
 // Shows camera preview + bounding box overlay when ON. Zero overhead when OFF.
@@ -557,7 +558,8 @@ const startDetection = () => {
         clearPathSince = null;
         nearestObject.value = result.nearest;
 
-        const { class: objClass, distance, direction } = result.nearest;
+        const { class: objClass, distance, direction, avoidance } = result.nearest;
+        const isStable   = result.nearest.stable === true;
         const isImminent = distance === 'imminent';
         const tier = getClassTier(objClass);
         const canSpeak = canSpeakClass(tier, objClass, now);
@@ -566,24 +568,53 @@ const startDetection = () => {
         const imminentCanSpeak = (now - lastClassSpokenAt) >= IMMINENT_COOLDOWN_MS;
         const shouldHandleTTS = isImminent ? imminentCanSpeak : canSpeak;
 
+        if (!isStable) {
+          stationaryAnnouncedClasses.clear();
+        } else if (!isImminent && stationaryAnnouncedClasses.has(objClass)) {
+          return;
+        }
+
         if (shouldHandleTTS && !isDistressSpeaking.value) {
           const shouldSpeak = shouldSpeakAlert(tier, direction, distance, isImminent);
 
           if (shouldSpeak) {
             let msg;
+            let msg2 = null;
             let ttsRate;
+            let ttsRate2 = 0.9;
 
             if (isImminent) {
               const locationPhrase = direction === 'ahead'
                   ? 'directly ahead'
                   : `on your ${direction}`;
+              
               msg = `Warning! ${objClass} ${locationPhrase}, stop!`;
-              ttsRate = 1.2;
+              ttsRate = 1.25;
+
+              if (avoidance === 'blocked') {
+                msg2 = `Path is blocked. Slowly turn left or right to find a clear path.`;
+              } else if (avoidance === 'left') {
+                msg2 = `Move to your left.`;
+              } else if (avoidance === 'right') {
+                msg2 = `Move to your right.`;
+              } else if (avoidance === 'both') {
+                msg2 = `Move left or right.`;
+              }
             } else {
               const locationPhrase = direction === 'ahead'
                   ? 'ahead'
                   : `on your ${direction}`;
-              msg = `${objClass} ${distance} ${locationPhrase}`;
+
+              let guidancePhrase = '';
+              if (direction === 'ahead' && avoidance && avoidance !== 'blocked') {
+                if (avoidance === 'left')       guidancePhrase = '. Move to your left.';
+                else if (avoidance === 'right') guidancePhrase = '. Move to your right.';
+                else if (avoidance === 'both')  guidancePhrase = '. Move left or right.';
+              } else if (direction === 'ahead' && avoidance === 'blocked') {
+                guidancePhrase = '. Path is blocked. Slowly turn left or right to find a clear path.';
+              }
+
+              msg = `${objClass} ${distance} ${locationPhrase}${guidancePhrase}`;
               ttsRate = 0.9;
             }
 
@@ -597,16 +628,28 @@ const startDetection = () => {
 
             isSpeaking.value = true;
             currentSpokenClass.value = objClass;
-            // Record cooldown timestamps immediately — not after speech finishes
+            if (isStable) stationaryAnnouncedClasses.add(objClass);
             lastSpokenTime.value = Date.now();
             lastSpokenByClass.set(objClass, lastSpokenTime.value);
-            // Fire-and-forget: TTS runs in background, detection loop continues at 300ms
+
             TextToSpeech.speak({
               text: msg,
               lang: 'en-US',
               rate: ttsRate,
               pitch: 1.0,
               volume: 1.0
+            }).then(async () => {
+              if (msg2) {
+                await new Promise(resolve => setTimeout(resolve, 150));
+                if (!isSpeaking.value) return;
+                await TextToSpeech.speak({
+                  text: msg2,
+                  lang: 'en-US',
+                  rate: ttsRate2,
+                  pitch: 1.0,
+                  volume: 1.0
+                });
+              }
             }).catch((ttsError) => {
               console.error('TTS error:', ttsError);
             }).finally(() => {
@@ -628,7 +671,7 @@ const startDetection = () => {
             isSpeaking.value = true;
             isPathClearAnnounced.value = true;
             TextToSpeech.speak({
-              text: 'Path clear',
+              text: 'Clear ahead',
               lang: 'en-US',
               rate: 1.0,
               pitch: 1.0,
@@ -1098,7 +1141,7 @@ const drawFpsOverlay = (ctx) => {
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
           </svg>
-          <p class="text-sm font-semibold">Path clear</p>
+          <p class="text-sm font-semibold">Clear ahead</p>
         </div>
       </div>
 

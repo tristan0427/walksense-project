@@ -28,6 +28,8 @@ export interface ObjectDetectionPlugin {
             confidence: number;
             camera: string;
             imminent: boolean;
+            avoidance?: string;  // "left" | "right" | "both" | "blocked"
+            stable?: boolean;
             // Bounding box coordinates (320x320 model space) for demo mode overlay
             x1?: number;
             y1?: number;
