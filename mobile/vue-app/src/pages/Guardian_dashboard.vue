@@ -208,6 +208,12 @@ const initHistoryMap = () => {
     icon: createDotIcon('#3b82f6'),
     zIndexOffset: 1000
   }).addTo(historyMap.value)
+
+  setTimeout(() => {
+    if (historyMap.value) {
+      historyMap.value.invalidateSize()
+    }
+  }, 400)
 }
 
 const togglePlayback = () => {
