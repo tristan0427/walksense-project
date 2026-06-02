@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "228027527509",
+    "project_id": "walksense-dad6a",
+    "storage_bucket": "walksense-dad6a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:228027527509:android:88adbc73564fb4eb1c3fdc",
+        "android_client_info": {
+          "package_name": "com.walksense.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBsU-WXWIm9sid4m08MtKkoIMfXNYTP4jo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

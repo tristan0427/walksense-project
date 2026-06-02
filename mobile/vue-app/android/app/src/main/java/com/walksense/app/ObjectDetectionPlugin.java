@@ -7,6 +7,8 @@ import android.graphics.RectF;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
@@ -1080,6 +1082,52 @@ public class ObjectDetectionPlugin extends Plugin {
         };
         if (classId >= 0 && classId < classes.length) return classes[classId];
         return "obstacle";
+    }
+
+    // ===== Frame Capture =====
+
+    @PluginMethod
+    public void captureLatestFrame(PluginCall call) {
+        Bitmap snapshot = null;
+        String currentCamera = activeCamera;
+
+        if (currentCamera.equals(CAM_NIGHT)) {
+            synchronized (nightFrameLock) {
+                if (latestNightFrame != null && !latestNightFrame.isRecycled()) {
+                    snapshot = latestNightFrame.copy(latestNightFrame.getConfig(), false);
+                }
+            }
+        } else {
+            synchronized (dayFrameLock) {
+                if (latestDayFrame != null && !latestDayFrame.isRecycled()) {
+                    snapshot = latestDayFrame.copy(latestDayFrame.getConfig(), false);
+                }
+            }
+        }
+
+        if (snapshot == null) {
+            call.reject("No camera stream frame available");
+            return;
+        }
+
+        final Bitmap finalSnapshot = snapshot;
+        new Thread(() -> {
+            try {
+                File cacheDir = getContext().getCacheDir();
+                File photoFile = new File(cacheDir, "distress_snapshot_" + System.currentTimeMillis() + ".jpg");
+                FileOutputStream fos = new FileOutputStream(photoFile);
+                finalSnapshot.compress(Bitmap.CompressFormat.JPEG, 80, fos);
+                fos.close();
+                finalSnapshot.recycle();
+
+                JSObject ret = new JSObject();
+                ret.put("photoPath", photoFile.getAbsolutePath());
+                call.resolve(ret);
+            } catch (Exception e) {
+                finalSnapshot.recycle();
+                call.reject("Failed to save frame: " + e.getMessage());
+            }
+        }).start();
     }
 
     // ===== Cleanup =====

@@ -286,6 +286,31 @@
       <path value="$PROJECT_DIR$/web-backend/vendor/symfony/polyfill-ctype" />
       <path value="$PROJECT_DIR$/web-backend/vendor/laravel/breeze" />
       <path value="$PROJECT_DIR$/web-backend/vendor/laravel/sanctum" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/grpc/grpc" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/rize/uri-template" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/firebase/php-jwt" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/kreait/firebase-tokens" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/kreait/firebase-php" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/mtdowling/jmespath.php" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/kreait/laravel-firebase" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/cuyz/valinor" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/fig/http-message-util" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/beste/in-memory-cache" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/beste/clock" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/lcobucci/jwt" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/beste/json" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/psr/cache" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/symfony/cache" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/symfony/cache-contracts" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/symfony/var-exporter" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/google/auth" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/google/cloud-storage" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/google/cloud-core" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/google/gax" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/google/common-protos" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/google/longrunning" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/google/grpc-gcp" />
+      <path value="$PROJECT_DIR$/web-backend/vendor/google/protobuf" />
     </include_path>
   </component>
   <component name="PhpProjectSharedConfiguration" php_language_level="8.2">

@@ -12,6 +12,8 @@
       <sourceFolder url="file://$MODULE_DIR$/web-backend/database/factories" isTestSource="false" packagePrefix="Database\Factories\" />
       <sourceFolder url="file://$MODULE_DIR$/web-backend/database/seeders" isTestSource="false" packagePrefix="Database\Seeders\" />
       <sourceFolder url="file://$MODULE_DIR$/web-backend/tests" isTestSource="true" packagePrefix="Tests\" />
+      <sourceFolder url="file://$MODULE_DIR$/web-backend/tests/Feature" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/web-backend/tests/Unit" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/backend/vendor/brick/math" />
       <excludeFolder url="file://$MODULE_DIR$/backend/vendor/carbonphp/carbon-doctrine-types" />
       <excludeFolder url="file://$MODULE_DIR$/backend/vendor/composer" />
@@ -284,6 +286,31 @@
       <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/laravel/sanctum" />
       <excludeFolder url="file://$MODULE_DIR$/web-backend/storage/app" />
       <excludeFolder url="file://$MODULE_DIR$/web-backend/storage/framework" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/beste/clock" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/beste/in-memory-cache" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/beste/json" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/cuyz/valinor" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/fig/http-message-util" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/firebase/php-jwt" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/google/auth" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/google/cloud-core" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/google/cloud-storage" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/google/common-protos" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/google/gax" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/google/grpc-gcp" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/google/longrunning" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/google/protobuf" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/grpc/grpc" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/kreait/firebase-php" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/kreait/firebase-tokens" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/kreait/laravel-firebase" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/lcobucci/jwt" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/mtdowling/jmespath.php" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/psr/cache" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/rize/uri-template" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/symfony/cache" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/symfony/cache-contracts" />
+      <excludeFolder url="file://$MODULE_DIR$/web-backend/vendor/symfony/var-exporter" />
     </content>
     <orderEntry type="inheritedJdk" />
     <orderEntry type="sourceFolder" forTests="false" />

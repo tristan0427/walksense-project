@@ -100,7 +100,7 @@ const handleLogin = async () => {
     <div class="flex-1 flex flex-col items-center justify-center">
       <!-- Header -->
       <div class="w-full max-w-md text-center mb-8">
-        <h1 class="text-2xl font-bold mb-2">Logging in as {{ userType }}</h1>
+        <h1 class="text-2xl font-bold mb-2">Login as {{ userType }}</h1>
         <h2 class="text-3xl font-black tracking-widest mb-4">
           with WALKSENSE!
         </h2>

@@ -45,6 +45,8 @@ export interface ObjectDetectionPlugin {
 
     stopESP32Stream(): Promise<{ success: boolean }>;
 
+    captureLatestFrame(): Promise<{ photoPath: string }>;
+
     unloadModel(): Promise<{ success: boolean }>;
 
     // Demo mode preview — emits camera frames as Base64 JPEG for canvas overlay

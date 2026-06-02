@@ -1,8 +1,10 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
+import { PushNotifications } from '@capacitor/push-notifications';
+import { Capacitor } from '@capacitor/core';
 import axios from "axios";
 import markerPinUrl from '/gps-mark-pin.png'
 
@@ -64,6 +66,192 @@ const showDismissConfirm = ref(null)
 const guardianLocation = ref(null)
 const activeDistressNotif = ref(null)
 const vibrationInterval = ref(null)
+const expandedPhotoId = ref(null)
+
+const togglePhotoExpand = (id) => {
+  expandedPhotoId.value = expandedPhotoId.value === id ? null : id
+}
+
+// History Feature State
+const showHistoryModal = ref(false)
+const selectedHistoryPwd = ref(null)
+const historyLocations = ref([])
+const historyLoading = ref(false)
+const historyFilter = ref('today')
+const customHistoryDate = ref('')
+const playbackIndex = ref(0)
+const isPlaying = ref(false)
+let playbackInterval = null
+
+const historyMap = ref(null)
+const historyPolyline = ref(null)
+const historyStartMarker = ref(null)
+const historyEndMarker = ref(null)
+const historyPlaybackMarker = ref(null)
+
+const getLocalDateString = (offsetDays = 0) => {
+  const d = new Date()
+  if (offsetDays) d.setDate(d.getDate() - offsetDays)
+  const year = d.getFullYear()
+  const month = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+const minDate = computed(() => getLocalDateString(7))
+const maxDate = computed(() => getLocalDateString(0))
+
+const getWaypointDescription = (loc, index, arr) => {
+  if (index === 0) return 'Started Route / Left Home'
+  if (index === arr.length - 1) return 'Latest Position / End of Route'
+  
+  const speed = parseFloat(loc.speed || 0)
+  if (speed > 0.3) {
+    return `Moving • Speed: ${speed.toFixed(1)} m/s`
+  }
+  return 'Stationary / Stopped'
+}
+
+const formatTime = (dateStr) => {
+  if (!dateStr) return ''
+  const d = new Date(dateStr)
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+const openRouteHistory = (pwd) => {
+  selectedHistoryPwd.value = pwd
+  showHistoryModal.value = true
+  historyFilter.value = 'today'
+  customHistoryDate.value = getLocalDateString(0)
+  fetchHistoryData()
+}
+
+const closeRouteHistory = () => {
+  showHistoryModal.value = false
+  selectedHistoryPwd.value = null
+  pausePlayback()
+  cleanupHistoryMap()
+}
+
+const setHistoryFilter = (filter) => {
+  historyFilter.value = filter
+  if (filter === 'today') customHistoryDate.value = getLocalDateString(0)
+  else if (filter === 'yesterday') customHistoryDate.value = getLocalDateString(1)
+  fetchHistoryData()
+}
+
+const cleanupHistoryMap = () => {
+  if (historyMap.value) {
+    historyMap.value.remove()
+    historyMap.value = null
+  }
+}
+
+const fetchHistoryData = async () => {
+  if (!selectedHistoryPwd.value) return
+  historyLoading.value = true
+  pausePlayback()
+  cleanupHistoryMap()
+  
+  try {
+    const response = await axios.get(`/api/location/pwd/${selectedHistoryPwd.value.pwd_id}/history?date=${customHistoryDate.value}`)
+    historyLocations.value = response.data.locations || []
+    playbackIndex.value = 0
+    if (historyLocations.value.length > 0) {
+      await nextTick()
+      initHistoryMap()
+    }
+  } catch (err) {
+    console.error('Failed to load history:', err)
+    historyLocations.value = []
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+const initHistoryMap = () => {
+  const container = document.getElementById('historyMapContainer')
+  if (!container) return
+  
+  historyMap.value = L.map('historyMapContainer', {
+    attributionControl: false,
+    zoomControl: true,
+  })
+
+  L.tileLayer('https://tiles.stadiamaps.com/tiles/outdoors/{z}/{x}/{y}{r}.png?api_key=' + import.meta.env.VITE_STADIA_API_KEY, {
+    maxZoom: 20,
+  }).addTo(historyMap.value)
+  
+  const latlngs = historyLocations.value.map(loc => [parseFloat(loc.latitude), parseFloat(loc.longitude)])
+  
+  historyPolyline.value = L.polyline(latlngs, {
+    color: '#f59e0b',
+    weight: 4,
+    opacity: 0.8,
+    lineCap: 'round',
+    lineJoin: 'round'
+  }).addTo(historyMap.value)
+  
+  historyMap.value.fitBounds(historyPolyline.value.getBounds(), { padding: [20, 20] })
+
+  const createDotIcon = (color) => L.divIcon({
+    className: '',
+    html: `<div style="width: 16px; height: 16px; background-color: ${color}; border: 3px solid white; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.3);"></div>`,
+    iconSize: [16, 16],
+    iconAnchor: [8, 8]
+  })
+
+  historyStartMarker.value = L.marker(latlngs[0], { icon: createDotIcon('#10b981') }).addTo(historyMap.value)
+  historyEndMarker.value = L.marker(latlngs[latlngs.length - 1], { icon: normalIcon }).addTo(historyMap.value)
+  
+  historyPlaybackMarker.value = L.marker(latlngs[0], { 
+    icon: createDotIcon('#3b82f6'),
+    zIndexOffset: 1000
+  }).addTo(historyMap.value)
+}
+
+const togglePlayback = () => {
+  if (isPlaying.value) pausePlayback()
+  else startPlayback()
+}
+
+const startPlayback = () => {
+  if (historyLocations.value.length === 0) return
+  if (playbackIndex.value >= historyLocations.value.length - 1) {
+    playbackIndex.value = 0
+  }
+  isPlaying.value = true
+  playbackInterval = setInterval(() => {
+    if (playbackIndex.value < historyLocations.value.length - 1) {
+      playbackIndex.value++
+      updatePlaybackMap()
+    } else {
+      pausePlayback()
+    }
+  }, 1000)
+}
+
+const pausePlayback = () => {
+  isPlaying.value = false
+  if (playbackInterval) {
+    clearInterval(playbackInterval)
+    playbackInterval = null
+  }
+}
+
+const jumpToWaypoint = (index) => {
+  playbackIndex.value = index
+  pausePlayback()
+  updatePlaybackMap()
+}
+
+const updatePlaybackMap = () => {
+  if (!historyMap.value || !historyLocations.value[playbackIndex.value]) return
+  const loc = historyLocations.value[playbackIndex.value]
+  const latlng = [parseFloat(loc.latitude), parseFloat(loc.longitude)]
+  historyPlaybackMarker.value.setLatLng(latlng)
+  historyMap.value.panTo(latlng)
+}
 
 const normalIcon = L.icon({
   iconUrl: markerPinUrl,
@@ -97,6 +285,8 @@ onMounted(async () => {
     loadPwdLocations()
     loadNotifications()
   }, 10000)
+
+  await setupPushAlerts();
 })
 
 onUnmounted(() => {
@@ -436,6 +626,22 @@ const isOldAlert = (dateString) => {
   return (now.getTime() - date.getTime()) > 600000
 }
 
+const resolveImageUrl = (url) => {
+  if (!url) return null;
+  const apiBase = import.meta.env.VITE_API_BASE_URL || '';
+  if (url.includes('localhost') && apiBase && !apiBase.includes('localhost')) {
+    try {
+      const apiHost = new URL(apiBase).host;
+      const parsedUrl = new URL(url);
+      parsedUrl.host = apiHost;
+      return parsedUrl.toString();
+    } catch (e) {
+      return url;
+    }
+  }
+  return url;
+}
+
 const getDistanceToNotif = (notif) => {
   if (!guardianLocation.value || !notif.latitude || !notif.longitude) return null
   const R = 6371
@@ -499,6 +705,70 @@ const locateDistressOnMap = (notif) => {
     closestMarker.openPopup()
   }
 }
+
+const setupPushAlerts = async () => {
+  if (!Capacitor.isNativePlatform()) {
+    console.log('Push notifications are only supported on native platforms (Android/iOS). Skipping registration.');
+    return;
+  }
+
+  try {
+    let permStatus = await PushNotifications.checkPermissions();
+
+    if (permStatus.receive === 'prompt') {
+      permStatus = await PushNotifications.requestPermissions();
+    }
+
+    if (permStatus.receive !== 'granted') {
+      console.warn("Guardian denied push notification permissions!");
+      return;
+    }
+
+    await PushNotifications.register();
+
+    PushNotifications.addListener('registration', async (token) => {
+      console.log('FCM Registration Token:', token.value);
+      
+      try {
+        await axios.post('/api/guardian/register-push-token', {
+          push_token: token.value
+        });
+        console.log('FCM Token successfully synced with backend server.');
+      } catch (err) {
+        console.error('Failed to register push token on backend:', err);
+      }
+    });
+
+    PushNotifications.addListener('registrationError', (error) => {
+      console.error('FCM Registration Error:', error);
+    });
+
+    PushNotifications.addListener('pushNotificationReceived', (notification) => {
+      console.log('Foreground Push Alert Received:', notification);
+      
+      triggerEmergencyAlarm();
+      loadNotifications();
+    });
+
+    PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+      console.log('User tapped background notification banner:', action.notification);
+      
+      const data = action.notification.data;
+      if (data && data.latitude && data.longitude) {
+        const notifPayload = {
+          latitude: data.latitude,
+          longitude: data.longitude,
+          triggered_at: new Date().toISOString()
+        };
+        
+        locateDistressOnMap(notifPayload);
+      }
+    });
+  } catch (err) {
+    console.error('Error during Push Notification setup:', err);
+  }
+};
+
 </script>
 
 <template>
@@ -642,6 +912,13 @@ const locateDistressOnMap = (notif) => {
           <div v-else>
             <p class="text-sm text-gray-500 italic">No location data yet</p>
           </div>
+          <button @click="openRouteHistory(pwd)"
+                  class="mt-3.5 w-full py-2 px-4 bg-yellow-50 hover:bg-yellow-100 text-yellow-800 border border-yellow-200 font-bold text-xs rounded-xl flex items-center justify-center gap-1.5 transition-all active:scale-[0.98]">
+            <svg class="w-4 h-4 text-yellow-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            View Route History
+          </button>
         </div>
 
         <!-- No PWDs -->
@@ -724,6 +1001,22 @@ const locateDistressOnMap = (notif) => {
               </div>
             </div>
 
+            <!-- Photo Toggle Button (if snapshot exists) -->
+            <div v-if="notif.image_url" class="mt-2.5">
+              <button @click="togglePhotoExpand(notif.id)"
+                      class="flex items-center gap-1 text-[11px] font-bold text-red-600 hover:text-red-800 transition-colors">
+                <span class="text-xs">{{ expandedPhotoId === notif.id ? '▼' : '▶' }}</span>
+                {{ expandedPhotoId === notif.id ? 'Hide Distress Snapshot' : 'View Distress Snapshot' }}
+              </button>
+              
+              <!-- Expandable Image -->
+              <div v-if="expandedPhotoId === notif.id" class="mt-2 rounded-xl overflow-hidden border border-red-200 shadow-sm animate-fadeIn">
+                <img :src="resolveImageUrl(notif.image_url)" 
+                     class="w-full h-36 object-cover" 
+                     alt="PWD Alert Snapshot" />
+              </div>
+            </div>
+
             <div class="mt-3 flex gap-2">
               <button @click="locateDistressOnMap(notif)"
                       v-if="notif.latitude && notif.longitude"
@@ -792,6 +1085,16 @@ const locateDistressOnMap = (notif) => {
             &#x1F4CD; {{ getDistanceToNotif(activeDistressNotif) }} from your location
           </p>
 
+          <!-- Render PWD Live Stream Snapshot -->
+          <div v-if="activeDistressNotif.image_url" class="mt-4 w-full rounded-2xl overflow-hidden border-2 border-red-500 shadow-md animate-fade-in">
+            <p class="text-[9px] uppercase tracking-widest font-black text-red-600 bg-red-50 py-1.5 border-b border-red-100">
+              ⚠️ Camera View from PWD Device
+            </p>
+            <img :src="resolveImageUrl(activeDistressNotif.image_url)" 
+                 class="w-full h-44 object-cover" 
+                 alt="Distress Scene Snapshot" />
+          </div>
+
           <div class="w-full mt-6 flex flex-col gap-2.5">
             <button @click="navigateToPwd(parseFloat(activeDistressNotif.latitude), parseFloat(activeDistressNotif.longitude), $event), handleStopAndLocate(activeDistressNotif)"
                     v-if="activeDistressNotif.latitude && activeDistressNotif.longitude"
@@ -817,6 +1120,130 @@ const locateDistressOnMap = (notif) => {
         </div>
       </div>
     </div>
+    
+    <!-- Route History Modal -->
+    <Transition name="fade">
+      <div v-if="showHistoryModal" class="fixed inset-0 bg-[#fafaf7] z-[11000] flex flex-col overflow-hidden">
+        
+        <!-- Modal Header -->
+        <header class="bg-[#f7d686] px-4 py-3 pb-3 flex items-center justify-between shadow-sm border-b border-yellow-300" style="padding-top: calc(env(safe-area-inset-top, 0px) + 12px);">
+          <div>
+            <h2 class="text-sm font-black tracking-widest uppercase text-gray-800">Route History</h2>
+            <p class="text-xs font-bold text-yellow-900 mt-0.5">{{ selectedHistoryPwd?.pwd_name }}</p>
+          </div>
+          <button @click="closeRouteHistory" class="p-2 bg-yellow-400/40 hover:bg-yellow-400/60 rounded-full transition-colors">
+            <svg class="w-5 h-5 text-gray-800" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </header>
+
+        <!-- Date Filters -->
+        <div class="px-4 py-3 bg-white shadow-sm z-10">
+          <div class="flex gap-2 mb-2">
+            <button @click="setHistoryFilter('today')" 
+                    :class="['flex-1 py-1.5 text-xs font-bold rounded-full transition-colors border', historyFilter === 'today' ? 'bg-[#f7d686] border-[#f7d686] text-[#5a3e00]' : 'bg-[#fafaf7] border-gray-200 text-gray-500']">
+              Today
+            </button>
+            <button @click="setHistoryFilter('yesterday')" 
+                    :class="['flex-1 py-1.5 text-xs font-bold rounded-full transition-colors border', historyFilter === 'yesterday' ? 'bg-[#f7d686] border-[#f7d686] text-[#5a3e00]' : 'bg-[#fafaf7] border-gray-200 text-gray-500']">
+              Yesterday
+            </button>
+            <button @click="setHistoryFilter('custom')" 
+                    :class="['flex-1 py-1.5 text-xs font-bold rounded-full transition-colors border', historyFilter === 'custom' ? 'bg-[#f7d686] border-[#f7d686] text-[#5a3e00]' : 'bg-[#fafaf7] border-gray-200 text-gray-500']">
+              Custom Date
+            </button>
+          </div>
+          <div v-if="historyFilter === 'custom'" class="animate-fadeIn mt-2 text-center">
+            <input type="date" 
+                   v-model="customHistoryDate" 
+                   :min="minDate" 
+                   :max="maxDate" 
+                   @change="fetchHistoryData" 
+                   class="px-3 py-1.5 rounded-lg border border-gray-300 text-xs font-bold text-gray-700 w-full focus:outline-none focus:ring-2 focus:ring-yellow-400" />
+            <p class="text-[10px] text-gray-400 mt-1 uppercase tracking-wide font-medium">Note: Route history is saved for the last 7 days.</p>
+          </div>
+        </div>
+
+        <!-- Content Area -->
+        <div class="flex-1 flex flex-col relative overflow-hidden bg-gray-50">
+          
+          <div v-if="historyLoading" class="absolute inset-0 flex items-center justify-center bg-white/80 z-20 backdrop-blur-sm">
+            <svg class="w-10 h-10 text-yellow-500 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+          </div>
+
+          <div v-else-if="historyLocations.length === 0" class="flex-1 flex flex-col items-center justify-center p-6 text-center">
+            <div class="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+              <svg class="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+              </svg>
+            </div>
+            <h3 class="text-base font-bold text-gray-800 mb-1">No data found</h3>
+            <p class="text-xs text-gray-500 max-w-[200px] mx-auto leading-relaxed">No route history available for this date (history is retained for 7 days).</p>
+          </div>
+
+          <div v-else class="flex-1 flex flex-col h-full overflow-hidden">
+            <!-- Map View -->
+            <div class="relative w-full h-[45%] shrink-0 shadow-sm z-0">
+              <div id="historyMapContainer" class="absolute inset-0"></div>
+            </div>
+
+            <!-- Playback & Timeline area -->
+            <div class="flex-1 bg-white flex flex-col z-10 shadow-[0_-4px_10px_-4px_rgba(0,0,0,0.1)] rounded-t-3xl -mt-4 overflow-hidden relative">
+              
+              <!-- Playback Controls -->
+              <div class="px-5 py-4 border-b border-gray-100 bg-white shrink-0">
+                <div class="flex items-center justify-between mb-2">
+                  <p class="text-xs font-bold text-gray-700">Route Playback</p>
+                  <p class="text-xs font-black text-[#5a3e00] bg-[#f7d686] px-2 py-0.5 rounded-md">
+                    {{ formatTime(historyLocations[playbackIndex].recorded_at) }}
+                  </p>
+                </div>
+                <div class="flex items-center gap-3">
+                  <button @click="togglePlayback" class="w-10 h-10 shrink-0 bg-[#f7d686] hover:bg-yellow-400 text-[#5a3e00] rounded-full flex items-center justify-center transition-transform active:scale-95 shadow-md shadow-yellow-200">
+                    <svg v-if="!isPlaying" class="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+                    <svg v-else class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                  </button>
+                  <input type="range" min="0" :max="historyLocations.length - 1" v-model.number="playbackIndex" @input="jumpToWaypoint(playbackIndex)" class="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-[#f59e0b]">
+                </div>
+              </div>
+
+              <!-- Timeline Feed -->
+              <div class="flex-1 overflow-y-auto p-5 pb-8 space-y-4 bg-gray-50">
+                <h3 class="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Timeline</h3>
+                
+                <div v-for="(loc, index) in historyLocations" :key="loc.id"
+                     @click="jumpToWaypoint(index)"
+                     :class="['relative flex gap-4 p-3 rounded-xl cursor-pointer transition-all border', playbackIndex === index ? 'bg-white border-yellow-300 shadow-sm ring-1 ring-yellow-400' : 'bg-transparent border-transparent hover:bg-white']">
+                  
+                  <div class="flex flex-col items-center shrink-0">
+                    <div :class="['w-3 h-3 rounded-full mt-1 border-2 border-white shadow-sm z-10', index === 0 ? 'bg-green-500' : index === historyLocations.length - 1 ? 'bg-red-500' : playbackIndex === index ? 'bg-blue-500 animate-pulse' : 'bg-yellow-400']"></div>
+                    <div v-if="index !== historyLocations.length - 1" class="w-px h-full bg-gray-200 my-1 -mb-6"></div>
+                  </div>
+
+                  <div class="flex-1 pb-1">
+                    <div class="flex items-center justify-between mb-0.5">
+                      <span class="text-[11px] font-black text-gray-800">{{ formatTime(loc.recorded_at) }}</span>
+                      <span v-if="playbackIndex === index" class="text-[9px] font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded uppercase">Active</span>
+                    </div>
+                    <p class="text-xs font-semibold text-gray-600 mb-1">{{ getWaypointDescription(loc, index, historyLocations) }}</p>
+                    <div class="flex items-center gap-2 text-[10px] font-medium text-gray-400">
+                      <span v-if="loc.battery_level">🔋 {{ loc.battery_level }}%</span>
+                      <span v-if="loc.battery_level && loc.accuracy">•</span>
+                      <span v-if="loc.accuracy">GPS ±{{ Number(loc.accuracy).toFixed(0) }}m</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+
   </div>
 </template>
 

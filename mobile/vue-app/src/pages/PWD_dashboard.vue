@@ -2,7 +2,7 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useRouter } from 'vue-router'
 import { TextToSpeech } from '@capacitor-community/text-to-speech';
-import { CapacitorHttp } from '@capacitor/core';
+import { Capacitor, CapacitorHttp } from '@capacitor/core';
 import { App } from '@capacitor/app';
 import LocationService from "../services/LocationService";
 import ObjectDetection from "../types/ObjectDetection";
@@ -19,9 +19,57 @@ const isTracking = ref(false);
 const currentLocation = ref(null);
 const error = ref('');
 
+const queueOfflineDistress = (data) => {
+  try {
+    const queue = JSON.parse(localStorage.getItem('offline_distress_queue') || '[]');
+    queue.push(data);
+    localStorage.setItem('offline_distress_queue', JSON.stringify(queue));
+  } catch (e) {
+    console.error('Failed to queue offline distress:', e);
+  }
+};
+
+const syncOfflineDistress = async () => {
+  try {
+    const queue = JSON.parse(localStorage.getItem('offline_distress_queue') || '[]');
+    if (queue.length === 0) return;
+    const failedToSync = [];
+    for (const item of queue) {
+      try {
+        const formData = new FormData();
+        formData.append('type', 'distress');
+        formData.append('is_emergency', 'true');
+        if (item.lat) formData.append('latitude', item.lat);
+        if (item.lng) formData.append('longitude', item.lng);
+        if (item.localPhotoPath) {
+          try {
+            const res = await fetch(Capacitor.convertFileSrc(item.localPhotoPath));
+            const blob = await res.blob();
+            formData.append('photo', blob, 'distress.jpg');
+          } catch (e) {
+            console.warn('Failed to load local offline photo for sync:', e);
+          }
+        }
+        await axios.post('/api/notifications', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' }
+        });
+      } catch (err) {
+        console.error('Failed to sync distress item:', err);
+        failedToSync.push(item);
+      }
+    }
+    localStorage.setItem('offline_distress_queue', JSON.stringify(failedToSync));
+  } catch (e) {
+    console.error('Error during syncOfflineDistress:', e);
+  }
+};
+
 const isNetworkOnline = ref(navigator.onLine);
 const updateNetworkStatus = () => {
   isNetworkOnline.value = navigator.onLine;
+  if (isNetworkOnline.value) {
+    syncOfflineDistress();
+  }
 };
 
 // ── GPS Retry Config ─────────────────────────────────────────────────────────
@@ -132,6 +180,10 @@ onMounted(async () => {
   window.addEventListener('popstate', handleBackButton);
   window.addEventListener('online', updateNetworkStatus);
   window.addEventListener('offline', updateNetworkStatus);
+
+  if (navigator.onLine) {
+    syncOfflineDistress();
+  }
 
   ObjectDetection.addListener('dayCamConnected', () => {
     dayCamConnected.value = true;
@@ -485,12 +537,43 @@ const sendDistressSignal = async (source = 'app_button') => {
       }
     }
 
-    await axios.post('/api/notifications', {
-      type: 'distress',
-      is_emergency: true,
-      latitude: lat,
-      longitude: lng
-    });
+    let localPhotoPath = null;
+    try {
+      const capResult = await ObjectDetection.captureLatestFrame();
+      localPhotoPath = capResult.photoPath;
+    } catch (e) {
+      console.warn("Failed to capture frame: ", e.message);
+    }
+
+    const formData = new FormData();
+    formData.append('type', 'distress');
+    formData.append('is_emergency', 'true');
+    if (lat) formData.append('latitude', lat);
+    if (lng) formData.append('longitude', lng);
+
+    if (localPhotoPath) {
+      try {
+        const res = await fetch(Capacitor.convertFileSrc(localPhotoPath));
+        const blob = await res.blob();
+        formData.append('photo', blob, 'distress.jpg');
+      } catch (e) {
+        console.warn("Failed to convert captured photo to blob: ", e.message);
+      }
+    }
+
+    if (navigator.onLine) {
+      await axios.post('/api/notifications', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+    } else {
+      queueOfflineDistress({
+        lat,
+        lng,
+        localPhotoPath,
+        timestamp: Date.now()
+      });
+      throw new Error("Network Error (Queued offline)");
+    }
 
     distressSent.value = true;
     setTimeout(() => {

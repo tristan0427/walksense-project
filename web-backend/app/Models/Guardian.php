@@ -17,6 +17,7 @@ class Guardian extends Model
         'lastname',
         'middle_initial',
         'address',
+        'push_token',
     ];
 
     // Relationship to User

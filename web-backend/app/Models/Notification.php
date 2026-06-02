@@ -11,6 +11,13 @@ class Notification extends Model
 
     protected $guarded = ['id'];
 
+    protected $appends = ['image_url'];
+
+    public function getImageUrlAttribute()
+    {
+        return $this->image_path ? asset('storage/' . $this->image_path) : null;
+    }
+
     public function pwd()
     {
         return $this->belongsTo(Pwd::class, 'pwd_id');

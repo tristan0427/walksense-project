@@ -128,12 +128,19 @@ class LocationController extends Controller
             ], 403);
         }
 
-        $hours = $request->query('hours',24);
+        $query = Location::where('user_id', $pwd->user_id);
 
-        $locations = Location::where ('user_id', $pwd->user_id)
-            ->where('recorded_at', '>=', now()->subHours($hours))
-            ->orderBy('recorded_at','desc')
-            ->get();
+        if ($request->has('date')) {
+            $dateStr = $request->query('date');
+            // Query records matching the requested local date
+            $query->whereDate('recorded_at', $dateStr);
+        } else {
+            $hours = $request->query('hours', 24);
+            $query->where('recorded_at', '>=', now()->subHours($hours));
+        }
+
+        // Return in chronological ascending order for route drawing and playback
+        $locations = $query->orderBy('recorded_at', 'asc')->get();
 
         return response()->json([
             'locations' => $locations,
