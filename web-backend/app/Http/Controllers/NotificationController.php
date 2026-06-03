@@ -39,7 +39,7 @@ class NotificationController extends Controller
             'is_emergency' => 'boolean',
             'latitude' => 'nullable|numeric',
             'longitude' => 'nullable|numeric',
-            'photo' => 'nullable|image|max:2048',
+            'photo' => 'nullable|file|max:2048',
         ]);
 
         $user = $request->user();

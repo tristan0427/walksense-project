@@ -45,7 +45,8 @@ const syncOfflineDistress = async () => {
           try {
             const res = await fetch(Capacitor.convertFileSrc(item.localPhotoPath));
             const blob = await res.blob();
-            formData.append('photo', blob, 'distress.jpg');
+            const imageBlob = new Blob([blob], { type: 'image/jpeg' });
+            formData.append('photo', imageBlob, 'distress.jpg');
           } catch (e) {
             console.warn('Failed to load local offline photo for sync:', e);
           }
@@ -518,6 +519,9 @@ const sendDistressSignal = async (source = 'app_button') => {
   distressFailed.value = false;
   distressErrorMessage.value = '';
 
+  try { await TextToSpeech.stop(); } catch (e) {}
+  isSpeaking.value = false;
+  currentSpokenClass.value = null;
   isDistressSpeaking.value = true;
   try { await TextToSpeech.speak({ text: 'Sending emergency signal.', lang: 'en-US' }); } catch (e) {}
   isDistressSpeaking.value = false;
@@ -555,7 +559,8 @@ const sendDistressSignal = async (source = 'app_button') => {
       try {
         const res = await fetch(Capacitor.convertFileSrc(localPhotoPath));
         const blob = await res.blob();
-        formData.append('photo', blob, 'distress.jpg');
+        const imageBlob = new Blob([blob], { type: 'image/jpeg' });
+        formData.append('photo', imageBlob, 'distress.jpg');
       } catch (e) {
         console.warn("Failed to convert captured photo to blob: ", e.message);
       }
@@ -580,6 +585,9 @@ const sendDistressSignal = async (source = 'app_button') => {
       distressSent.value = false;
     }, 4000);
 
+    try { await TextToSpeech.stop(); } catch (e) {}
+    isSpeaking.value = false;
+    currentSpokenClass.value = null;
     isDistressSpeaking.value = true;
     try {
       await TextToSpeech.speak({
@@ -610,6 +618,9 @@ const sendDistressSignal = async (source = 'app_button') => {
     distressErrorMessage.value = spokenError;
     setTimeout(() => { distressFailed.value = false; }, 8000);
 
+    try { await TextToSpeech.stop(); } catch (e) {}
+    isSpeaking.value = false;
+    currentSpokenClass.value = null;
     isDistressSpeaking.value = true;
     try { await TextToSpeech.speak({ text: spokenError, lang: 'en-US' }); } catch (e) {}
     isDistressSpeaking.value = false;
@@ -617,6 +628,8 @@ const sendDistressSignal = async (source = 'app_button') => {
   } finally {
     isSendingDistress.value = false;
     isDistressSpeaking.value = false;
+    isSpeaking.value = false;
+    currentSpokenClass.value = null;
   }
 };
 

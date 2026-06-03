@@ -158,15 +158,15 @@ const fetchHistoryData = async () => {
     const response = await axios.get(`/api/location/pwd/${selectedHistoryPwd.value.pwd_id}/history?date=${customHistoryDate.value}&timezone=${timezone}`)
     historyLocations.value = response.data.locations || []
     playbackIndex.value = 0
-    if (historyLocations.value.length > 0) {
-      await nextTick()
-      initHistoryMap()
-    }
   } catch (err) {
     console.error('Failed to load history:', err)
     historyLocations.value = []
   } finally {
     historyLoading.value = false
+    if (historyLocations.value.length > 0) {
+      await nextTick()
+      initHistoryMap()
+    }
   }
 }
 
