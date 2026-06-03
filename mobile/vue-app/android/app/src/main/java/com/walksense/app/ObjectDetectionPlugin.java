@@ -194,8 +194,8 @@ public class ObjectDetectionPlugin extends Plugin {
 
     // ===== Stationary Detection =====
     private static final int   STABILITY_MIN_FRAMES    = 10;
-    private static final float STABILITY_RATIO_DELTA   = 0.05f;
-    private static final float STABILITY_CENTERX_DELTA = 25.0f;
+    private static final float STABILITY_RATIO_DELTA   = 0.15f;
+    private static final float STABILITY_CENTERX_DELTA = 60.0f;
 
     private boolean isDetectionStable(String currentClass) {
         if (classHistory.size() < STABILITY_MIN_FRAMES) return false;
@@ -205,17 +205,20 @@ public class ObjectDetectionPlugin extends Plugin {
         List<Float>  recentRatios   = ratioHistory.subList(recentSize - STABILITY_MIN_FRAMES, recentSize);
         List<Float>  recentCenterXs = centerXHistory.subList(recentSize - STABILITY_MIN_FRAMES, recentSize);
 
+        int matchCount = 0;
         for (String cls : recentClasses) {
-            if (!cls.equals(currentClass)) return false;
+            if (cls.equals(currentClass)) matchCount++;
         }
+        if (matchCount < 8) return false;
 
-        float minRatio = Collections.min(recentRatios);
-        float maxRatio = Collections.max(recentRatios);
-        if ((maxRatio - minRatio) > STABILITY_RATIO_DELTA) return false;
+        List<Float> validRatios = new ArrayList<>();
+        for (Float r : recentRatios) if (r > 0.0f) validRatios.add(r);
+        
+        List<Float> validCenterXs = new ArrayList<>();
+        for (Float cx : recentCenterXs) if (cx > 0.0f) validCenterXs.add(cx);
 
-        float minX = Collections.min(recentCenterXs);
-        float maxX = Collections.max(recentCenterXs);
-        if ((maxX - minX) > STABILITY_CENTERX_DELTA) return false;
+        if (!validRatios.isEmpty() && (Collections.max(validRatios) - Collections.min(validRatios)) > STABILITY_RATIO_DELTA) return false;
+        if (!validCenterXs.isEmpty() && (Collections.max(validCenterXs) - Collections.min(validCenterXs)) > STABILITY_CENTERX_DELTA) return false;
 
         return true;
     }

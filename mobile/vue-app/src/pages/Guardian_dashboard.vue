@@ -731,6 +731,25 @@ const setupPushAlerts = async () => {
       return;
     }
 
+    // Create the Android notification channel BEFORE registering.
+    // Android 8+ (API 26+) silently drops notifications if the target
+    // channel_id does not exist on the device. This must match the
+    // channel_id sent by the Laravel backend ('emergency_alerts').
+    if (Capacitor.getPlatform() === 'android') {
+      await PushNotifications.createChannel({
+        id: 'emergency_alerts',
+        name: 'Emergency Alerts',
+        description: 'High-priority distress signals from linked PWDs',
+        importance: 5,       // IMPORTANCE_HIGH — heads-up banner + sound
+        visibility: 1,       // VISIBILITY_PUBLIC — show on lock screen
+        vibration: true,
+        sound: 'default',
+        lights: true,
+        lightColor: '#FF0000',
+      });
+      console.log('Android notification channel "emergency_alerts" created.');
+    }
+
     await PushNotifications.register();
 
     PushNotifications.addListener('registration', async (token) => {

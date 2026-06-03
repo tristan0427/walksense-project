@@ -139,6 +139,8 @@ const currentSpokenClass = ref(null);
 const isPathClearAnnounced = ref(false);
 let clearPathSince = null;
 const stationaryAnnouncedClasses = new Set();
+let unstableStartTime = null;
+const UNSTABLE_DEBOUNCE_MS = 3000;
 
 // ── Demo Mode ────────────────────────────────────────────────────────────────
 // Shows camera preview + bounding box overlay when ON. Zero overhead when OFF.
@@ -655,7 +657,6 @@ const startDetection = () => {
         nearestObject.value = result.nearest;
 
         const { class: objClass, distance, direction, avoidance } = result.nearest;
-        const isStable   = result.nearest.stable === true;
         const isImminent = distance === 'imminent';
         const tier = getClassTier(objClass);
         const canSpeak = canSpeakClass(tier, objClass, now);
@@ -664,11 +665,11 @@ const startDetection = () => {
         const imminentCanSpeak = (now - lastClassSpokenAt) >= IMMINENT_COOLDOWN_MS;
         const shouldHandleTTS = isImminent ? imminentCanSpeak : canSpeak;
 
-        if (!isStable) {
-          stationaryAnnouncedClasses.clear();
-        } else if (!isImminent && stationaryAnnouncedClasses.has(objClass)) {
+        const suppressionKey = `${objClass}::${distance}`;
+        if (stationaryAnnouncedClasses.has(suppressionKey)) {
           return;
         }
+        unstableStartTime = null;
 
         if (shouldHandleTTS && !isDistressSpeaking.value) {
           const shouldSpeak = shouldSpeakAlert(tier, direction, distance, isImminent);
@@ -724,7 +725,7 @@ const startDetection = () => {
 
             isSpeaking.value = true;
             currentSpokenClass.value = objClass;
-            if (isStable) stationaryAnnouncedClasses.add(objClass);
+            stationaryAnnouncedClasses.add(suppressionKey);
             lastSpokenTime.value = Date.now();
             lastSpokenByClass.set(objClass, lastSpokenTime.value);
 
@@ -756,6 +757,12 @@ const startDetection = () => {
         }
       } else {
         nearestObject.value = null;
+
+        if (unstableStartTime === null) {
+          unstableStartTime = now;
+        } else if (now - unstableStartTime >= UNSTABLE_DEBOUNCE_MS) {
+          stationaryAnnouncedClasses.clear();
+        }
 
         if (clearPathSince === null) {
           clearPathSince = Date.now();

@@ -80,7 +80,8 @@ class NotificationController extends Controller
                 $messaging = app('firebase.messaging');
                 $pwdName = trim(($pwd->firstname ?? '') . ' ' . ($pwd->lastname ?? '')) ?: ($pwd->user->name ?? 'Your PWD');
                 
-                $message = CloudMessage::withTarget('token', $guardian->push_token)
+                $message = CloudMessage::new()
+                    ->withToken($guardian->push_token)
                     ->withNotification(FirebaseNotification::create(
                         '⚠️ EMERGENCY DISTRESS SIGNAL',
                         $pwdName . ' has triggered an emergency distress signal!'
@@ -110,7 +111,7 @@ class NotificationController extends Controller
                     ]);
                     
                 $messaging->send($message);
-            } catch (\Exception $e) {
+            } catch (\Throwable $e) {
                 \Log::error('FCM dispatch failed: ' . $e->getMessage());
             }
         }
