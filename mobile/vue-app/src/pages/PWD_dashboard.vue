@@ -38,7 +38,7 @@ const syncOfflineDistress = async () => {
       try {
         const formData = new FormData();
         formData.append('type', 'distress');
-        formData.append('is_emergency', 'true');
+        formData.append('is_emergency', '1');
         if (item.lat) formData.append('latitude', item.lat);
         if (item.lng) formData.append('longitude', item.lng);
         if (item.localPhotoPath) {
@@ -551,7 +551,7 @@ const sendDistressSignal = async (source = 'app_button') => {
 
     const formData = new FormData();
     formData.append('type', 'distress');
-    formData.append('is_emergency', 'true');
+    formData.append('is_emergency', '1');
     if (lat) formData.append('latitude', lat);
     if (lng) formData.append('longitude', lng);
 
