@@ -17,6 +17,7 @@ class CurrentLocation extends Model
         'accuracy',
         'battery_level',
         'last_updated',
+        'is_stationary',
     ];
 
     protected $casts = [
@@ -25,6 +26,7 @@ class CurrentLocation extends Model
         'accuracy' => 'decimal:2',
         'battery_level' => 'integer',
         'last_updated' => 'datetime',
+        'is_stationary' => 'boolean',
     ];
 
     public function user(): BelongsTo

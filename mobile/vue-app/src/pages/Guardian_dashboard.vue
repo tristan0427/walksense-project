@@ -154,7 +154,8 @@ const fetchHistoryData = async () => {
   cleanupHistoryMap()
   
   try {
-    const response = await axios.get(`/api/location/pwd/${selectedHistoryPwd.value.pwd_id}/history?date=${customHistoryDate.value}`)
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const response = await axios.get(`/api/location/pwd/${selectedHistoryPwd.value.pwd_id}/history?date=${customHistoryDate.value}&timezone=${timezone}`)
     historyLocations.value = response.data.locations || []
     playbackIndex.value = 0
     if (historyLocations.value.length > 0) {
@@ -851,19 +852,22 @@ const setupPushAlerts = async () => {
             <h2 class="text-sm font-bold tracking-tight text-gray-800">{{ pwd.pwd_name }}</h2>
 
             <div class="flex items-center gap-2">
-              <span v-if="pwd.location && isPwdOnline(pwd)" class="relative flex h-3 w-3">
+              <span v-if="pwd.location && isPwdOnline(pwd) && !pwd.location.is_stationary" class="relative flex h-3 w-3">
                 <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                 <span class="relative inline-flex rounded-full h-3 w-3 bg-green-500"></span>
+              </span>
+              <span v-else-if="pwd.location && isPwdOnline(pwd) && pwd.location.is_stationary" class="relative flex h-3 w-3">
+                <span class="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
               </span>
               <span v-else-if="pwd.location" class="h-3 w-3 rounded-full bg-gray-400"></span>
 
               <span :class="[
-                'px-2 py-1 rounded-full text-xs font-semibold',
+                'px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider',
                 pwd.location && isPwdOnline(pwd)
-                  ? 'bg-green-100 text-green-800'
+                  ? (pwd.location.is_stationary ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-800')
                   : 'bg-gray-100 text-gray-800'
               ]">
-                {{ pwd.location && isPwdOnline(pwd) ? 'Online' : 'Offline' }}
+                {{ pwd.location && isPwdOnline(pwd) ? (pwd.location.is_stationary ? 'Stationary' : 'Online') : 'Offline' }}
               </span>
             </div>
           </div>

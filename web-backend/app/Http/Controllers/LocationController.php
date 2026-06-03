@@ -27,6 +27,7 @@ class LocationController extends Controller
             'speed' => ['nullable', 'numeric', 'min:0'],
             'heading' => ['nullable', 'numeric', 'between:0,360'],
             'battery_level' => ['nullable', 'integer', 'between:0,100'],
+            'is_stationary' => ['nullable', 'boolean'],
         ]);
 
         $user = Auth::user();
@@ -34,17 +35,22 @@ class LocationController extends Controller
         try {
             DB::beginTransaction();
 
-            $location = Location::create([
-                'user_id' => $user->id,
-                'latitude' => $validated['latitude'],
-                'longitude' => $validated['longitude'],
-                'accuracy' => $validated['accuracy'] ?? null,
-                'altitude' => $validated['altitude'] ?? null,
-                'speed' => $validated['speed'] ?? null,
-                'heading' => $validated['heading'] ?? null,
-                'battery_level' => $validated['battery_level'] ?? null,
-                'recorded_at' => now(),
-            ]);
+            $isStationary = $request->input('is_stationary', false);
+            $location = null;
+
+            if (!$isStationary) {
+                $location = Location::create([
+                    'user_id' => $user->id,
+                    'latitude' => $validated['latitude'],
+                    'longitude' => $validated['longitude'],
+                    'accuracy' => $validated['accuracy'] ?? null,
+                    'altitude' => $validated['altitude'] ?? null,
+                    'speed' => $validated['speed'] ?? null,
+                    'heading' => $validated['heading'] ?? null,
+                    'battery_level' => $validated['battery_level'] ?? null,
+                    'recorded_at' => now(),
+                ]);
+            }
 
             CurrentLocation::updateOrCreate(
                 ['user_id' => $user->id],
@@ -54,6 +60,7 @@ class LocationController extends Controller
                     'accuracy' => $validated['accuracy'] ?? null,
                     'battery_level' => $validated['battery_level'] ?? null,
                     'last_updated' => now(),
+                    'is_stationary' => $isStationary,
                 ]
             );
 
@@ -62,7 +69,7 @@ class LocationController extends Controller
             return response()->json([
                 'message' => 'Location updated successfully.',
                 'location' => $location,
-            ],201);
+            ], 201);
 
         }catch (\Exception $exception){
             DB::rollBack();
@@ -132,8 +139,17 @@ class LocationController extends Controller
 
         if ($request->has('date')) {
             $dateStr = $request->query('date');
-            // Query records matching the requested local date
-            $query->whereDate('recorded_at', $dateStr);
+            $timezone = $request->query('timezone', 'UTC');
+
+            try {
+                // Calculate local day start/end boundaries, and convert them back to UTC
+                $startUtc = \Carbon\Carbon::parse($dateStr, $timezone)->startOfDay()->setTimezone('UTC');
+                $endUtc = \Carbon\Carbon::parse($dateStr, $timezone)->endOfDay()->setTimezone('UTC');
+                $query->whereBetween('recorded_at', [$startUtc, $endUtc]);
+            } catch (\Exception $e) {
+                // Fallback if parsing fails
+                $query->whereDate('recorded_at', $dateStr);
+            }
         } else {
             $hours = $request->query('hours', 24);
             $query->where('recorded_at', '>=', now()->subHours($hours));

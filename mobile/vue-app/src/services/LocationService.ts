@@ -26,6 +26,10 @@ class LocationService {
     private watcherId: string | null = null;
     private isTracking = false;
     private readonly debugLogs = false;
+    private lastLatitude: number | null = null;
+    private lastLongitude: number | null = null;
+    private lastSentTime: number = 0;
+    private heartbeatTimer: any = null;
 
     /**
      * Start background location tracking
@@ -59,21 +63,19 @@ class LocationService {
             });
 
             this.isTracking = true;
+            this.startHeartbeatTimer();
 
             if (this.debugLogs) {
                 console.log('Requesting background location permissions...');
             }
 
-
-            //The import has been on Comment state because that will work only on android, uncomment it when  testing on android to work
-            // Just ignore this redlines, still work on browser when testing
             this.watcherId = await BackgroundGeolocation.addWatcher(
                 {
                     backgroundMessage: 'WalkSense is tracking your location for safety.',
                     backgroundTitle: 'Safety Tracking Active',
                     requestPermissions: true,
                     stale: false,
-                    distanceFilter: 20,
+                    distanceFilter: 10,
                     timeout: 30000,
                     maximumAge: 5000,
                     enableHighAccuracy: true,
@@ -184,6 +186,7 @@ class LocationService {
                 }
             );
             this.isTracking = true;
+            this.startHeartbeatTimer();
             if (this.debugLogs) {
                 console.log('Browser tracking started');
             }
@@ -209,6 +212,7 @@ class LocationService {
 
             this.watcherId = null;
             this.isTracking = false;
+            this.stopHeartbeatTimer();
             if (this.debugLogs) {
                 console.log('Tracking stopped');
             }
@@ -279,6 +283,22 @@ class LocationService {
                 }
             }
 
+            let isStationary = false;
+            if (this.lastLatitude !== null && this.lastLongitude !== null) {
+                const distance = this.calculateDistance(
+                    location.latitude,
+                    location.longitude,
+                    this.lastLatitude,
+                    this.lastLongitude
+                );
+                const speed = location.speed ?? 0;
+                if (distance < 5 && speed < 0.2) {
+                    isStationary = true;
+                }
+            } else {
+                isStationary = (location.speed ?? 0) < 0.2;
+            }
+
             const payload = {
                 latitude: location.latitude,
                 longitude: location.longitude,
@@ -287,6 +307,7 @@ class LocationService {
                 speed: location.speed,
                 heading: location.bearing,
                 battery_level: batteryLevel,
+                is_stationary: isStationary,
             };
 
             if (this.debugLogs) {
@@ -309,6 +330,9 @@ class LocationService {
             });
 
             if (response.status >= 200 && response.status < 300) {
+                this.lastLatitude = location.latitude;
+                this.lastLongitude = location.longitude;
+                this.lastSentTime = Date.now();
                 if (this.debugLogs) {
                     console.log('Location sent successfully:', response.data);
                 }
@@ -326,6 +350,47 @@ class LocationService {
     /**
      * Check if tracking is active
      */
+    private calculateDistance(lat1: number, lon1: number, lat2: number, lon2: number): number {
+        const R = 6371e3; // Earth's radius in meters
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                  Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+    }
+
+    private startHeartbeatTimer() {
+        this.stopHeartbeatTimer();
+        this.lastSentTime = Date.now();
+        this.heartbeatTimer = setInterval(async () => {
+            const now = Date.now();
+            if (now - this.lastSentTime >= 600000) { // 10 minutes
+                try {
+                    const position = await this.getCurrentLocation();
+                    await this.sendLocationUpdate({
+                        latitude: position.coords.latitude,
+                        longitude: position.coords.longitude,
+                        accuracy: position.coords.accuracy,
+                        altitude: position.coords.altitude || undefined,
+                        speed: position.coords.speed || undefined,
+                        bearing: position.coords.heading || undefined,
+                    });
+                } catch (e) {
+                    console.error('Heartbeat update failed:', e);
+                }
+            }
+        }, 60000); // Check every minute
+    }
+
+    private stopHeartbeatTimer() {
+        if (this.heartbeatTimer) {
+            clearInterval(this.heartbeatTimer);
+            this.heartbeatTimer = null;
+        }
+    }
+
     isTrackingActive(): boolean {
         return this.isTracking;
     }
