@@ -94,8 +94,8 @@ class NotificationController extends Controller
                     ->withAndroidConfig([
                         'priority' => 'high',
                         'notification' => [
-                            'sound' => 'default',
-                            'channel_id' => 'emergency_alerts',
+                            'sound' => 'alert',
+                            'channel_id' => 'emergency_alerts_v2',
                         ]
                     ])
                     ->withApnsConfig([
@@ -134,6 +134,30 @@ class NotificationController extends Controller
         $notification->delete();
 
         return response()->json(['message' => 'Notification deleted successfully'], 200);
+    }
+
+    public function acknowledge(Request $request, $id)
+    {
+        $user = $request->user();
+        if ($user->role !== 'guardian') {
+            return response()->json(['message' => 'Unauthorized'], 403);
+        }
+
+        $guardian = Guardian::where('user_id', $user->id)->first();
+        if (!$guardian) {
+            return response()->json(['message' => 'Guardian profile not found'], 404);
+        }
+
+        $notification = Notification::where('id', $id)
+            ->where('guardian_id', $guardian->id)
+            ->firstOrFail();
+
+        $notification->update([
+            'status' => 'acknowledged',
+            'acknowledged_at' => Carbon::now(),
+        ]);
+
+        return response()->json(['message' => 'Notification acknowledged'], 200);
     }
 
     public function updatePushToken(Request $request)

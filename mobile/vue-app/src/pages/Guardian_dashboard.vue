@@ -66,6 +66,7 @@ const showDismissConfirm = ref(null)
 const guardianLocation = ref(null)
 const activeDistressNotif = ref(null)
 const vibrationInterval = ref(null)
+const alertedIds = ref(new Set())
 const expandedPhotoId = ref(null)
 
 const togglePhotoExpand = (id) => {
@@ -420,14 +421,16 @@ const loadNotifications = async () => {
     const fetchedNotifs = response.data.notifications
 
     if (fetchedNotifs && fetchedNotifs.length > 0) {
-      const newestId = Math.max(...fetchedNotifs.map(n => n.id))
-      const lastAlertedId = parseInt(localStorage.getItem('last_alerted_id') || '0')
+      // Only trigger alarm for unread notifications not yet alerted this session
+      const newUnread = fetchedNotifs.filter(
+        n => n.status === 'unread' && !alertedIds.value.has(n.id)
+      )
 
-      if (newestId > lastAlertedId) {
-        const newestNotif = fetchedNotifs.find(n => n.id === newestId)
-        if (newestNotif) activeDistressNotif.value = newestNotif
+      if (newUnread.length > 0) {
+        const newestUnread = newUnread.reduce((a, b) => a.id > b.id ? a : b)
+        activeDistressNotif.value = newestUnread
         triggerEmergencyAlarm()
-        localStorage.setItem('last_alerted_id', newestId.toString())
+        newUnread.forEach(n => alertedIds.value.add(n.id))
       }
     }
 
@@ -470,9 +473,18 @@ const deleteNotification = async (id) => {
   }
 }
 
+const acknowledgeNotification = async (id) => {
+  try {
+    await axios.patch(`/api/notifications/${id}/acknowledge`)
+  } catch (err) {
+    console.error('Failed to acknowledge notification:', err)
+  }
+}
+
 const handleStopAndLocate = (notif) => {
   stopEmergencyAlarm()
   activeDistressNotif.value = null
+  acknowledgeNotification(notif.id)
   locateDistressOnMap(notif)
 }
 
@@ -765,18 +777,23 @@ const setupPushAlerts = async () => {
     // channel_id does not exist on the device. This must match the
     // channel_id sent by the Laravel backend ('emergency_alerts').
     if (Capacitor.getPlatform() === 'android') {
+      // Delete the old channel (Android ignores updates to existing channels)
+      try {
+        await PushNotifications.deleteChannel({ id: 'emergency_alerts' });
+      } catch (_) { /* ignore if it doesn't exist */ }
+
       await PushNotifications.createChannel({
-        id: 'emergency_alerts',
+        id: 'emergency_alerts_v2',
         name: 'Emergency Alerts',
         description: 'High-priority distress signals from linked PWDs',
         importance: 5,       // IMPORTANCE_HIGH — heads-up banner + sound
         visibility: 1,       // VISIBILITY_PUBLIC — show on lock screen
         vibration: true,
-        sound: 'default',
+        sound: 'alert',      // References res/raw/alert.mp3 (no extension)
         lights: true,
         lightColor: '#FF0000',
       });
-      console.log('Android notification channel "emergency_alerts" created.');
+      console.log('Android notification channel "emergency_alerts_v2" created with custom sound.');
     }
 
     await PushNotifications.register();

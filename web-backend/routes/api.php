@@ -24,6 +24,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/notifications', [\App\Http\Controllers\NotificationController::class, 'store']);
     Route::get('/notifications', [\App\Http\Controllers\NotificationController::class, 'index']);
     Route::delete('/notifications/{id}', [\App\Http\Controllers\NotificationController::class, 'destroy']);
+    Route::patch('/notifications/{id}/acknowledge', [\App\Http\Controllers\NotificationController::class, 'acknowledge']);
     Route::post('/guardian/register-push-token', [\App\Http\Controllers\NotificationController::class, 'updatePushToken']);
 
     Route::get('/location/pwd/{pwdUserId}', [LocationController::class, 'getCurrentLocations'])->name('api.location.current');
