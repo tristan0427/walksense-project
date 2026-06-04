@@ -223,35 +223,114 @@ public class ObjectDetectionPlugin extends Plugin {
         return true;
     }
 
+    // ===== Zone Boundaries (25/50/25 split) =====
+    // LEFT = 0–25% | CENTER = 25–75% (walking corridor) | RIGHT = 75–100%
+    private static final float CENTER_LEFT_BOUNDARY  = 0.25f;  // 25% = 80px of 320
+    private static final float CENTER_RIGHT_BOUNDARY = 0.75f;  // 75% = 240px of 320
+
     private String getDirection(float centerX, int frameWidth) {
-        float leftThird  = frameWidth / 3.0f;
-        float rightThird = (frameWidth * 2.0f) / 3.0f;
-        if (centerX < leftThird)  return "left side";
-        else if (centerX > rightThird) return "right side";
-        else return "ahead";
+        float leftBound  = frameWidth * CENTER_LEFT_BOUNDARY;
+        float rightBound = frameWidth * CENTER_RIGHT_BOUNDARY;
+        if (centerX < leftBound)  return "left side";
+        if (centerX > rightBound) return "right side";
+        return "ahead";
     }
 
-    // ===== Avoidance Guidance =====
-    private static final float AVOIDANCE_MIN_CLEAR_PX = 50.0f;  // ~15% of 320px frame
-    private static final float AVOIDANCE_BLOCKED_PX   = 30.0f;  // ~10% of 320px frame
+    // ===== Zone-Aware Avoidance Guidance =====
 
-    private String getAvoidanceDirection(float x1, float x2, int frameWidth) {
-        float leftClear  = x1;                    // gap from left edge to obstacle
-        float rightClear = frameWidth - x2;       // gap from obstacle to right edge
+    /**
+     * Computes how much of a zone (LEFT or RIGHT) is occupied by obstacle bounding boxes.
+     * Returns a ratio from 0.0 (empty) to 1.0 (fully covered).
+     */
+    private float computeZoneOccupancy(List<Detection> dets, float zoneStart, float zoneEnd) {
+        if (dets.isEmpty()) return 0f;
 
-        boolean leftOpen  = leftClear  > AVOIDANCE_MIN_CLEAR_PX;
-        boolean rightOpen = rightClear > AVOIDANCE_MIN_CLEAR_PX;
+        float zoneWidth = zoneEnd - zoneStart;
+        float zoneHeight = INPUT_SIZE;
+        float zoneArea = zoneWidth * zoneHeight;
 
-        if (leftOpen && rightOpen) {
-            // Both sides have room — suggest the side with MORE space
-            if (leftClear > rightClear + 30) return "left";
-            if (rightClear > leftClear + 30) return "right";
-            return "both";  // roughly equal room on both sides
+        // Sum up clipped bounding box areas within this zone
+        float totalOccupied = 0f;
+        for (Detection det : dets) {
+            float clippedX1 = Math.max(det.x1, zoneStart);
+            float clippedX2 = Math.min(det.x2, zoneEnd);
+            float clippedY1 = Math.max(det.y1, 0);
+            float clippedY2 = Math.min(det.y2, INPUT_SIZE);
+
+            if (clippedX2 > clippedX1 && clippedY2 > clippedY1) {
+                totalOccupied += (clippedX2 - clippedX1) * (clippedY2 - clippedY1);
+            }
         }
-        if (leftOpen)  return "left";
-        if (rightOpen) return "right";
 
-        // Both sides below threshold — obstacle fills the frame width
+        return Math.min(totalOccupied / zoneArea, 1.0f);
+    }
+
+    /**
+     * Analyzes LEFT and RIGHT zone occupancy to determine spatial clearance.
+     * Returns a JSObject with clearance flags and occupancy values.
+     * <20% occupied = "clear", 20-60% = "narrow", >60% = "blocked"
+     */
+    private JSObject computeZoneClearance(List<Detection> leftDets, List<Detection> rightDets) {
+        JSObject info = new JSObject();
+
+        float leftBound  = INPUT_SIZE * CENTER_LEFT_BOUNDARY;   // 80px
+        float rightBound = INPUT_SIZE * CENTER_RIGHT_BOUNDARY;  // 240px
+
+        // LEFT zone: 0 to leftBound (80px wide)
+        float leftOccupancy  = computeZoneOccupancy(leftDets, 0, leftBound);
+        // RIGHT zone: rightBound to INPUT_SIZE (80px wide)
+        float rightOccupancy = computeZoneOccupancy(rightDets, rightBound, INPUT_SIZE);
+
+        // Determine clearance labels
+        info.put("leftClear",      leftOccupancy < 0.20f);
+        info.put("rightClear",     rightOccupancy < 0.20f);
+        info.put("leftNarrow",     leftOccupancy >= 0.20f && leftOccupancy < 0.60f);
+        info.put("rightNarrow",    rightOccupancy >= 0.20f && rightOccupancy < 0.60f);
+        info.put("leftOccupancy",  leftOccupancy);
+        info.put("rightOccupancy", rightOccupancy);
+
+        // Identify what's blocking each side (for informative TTS)
+        if (!leftDets.isEmpty()) {
+            info.put("leftObstacle", leftDets.get(0).className);
+        }
+        if (!rightDets.isEmpty()) {
+            info.put("rightObstacle", rightDets.get(0).className);
+        }
+
+        return info;
+    }
+
+    /**
+     * Zone-aware avoidance: uses actual LEFT/RIGHT zone occupancy instead of pixel gaps.
+     * Returns: "left", "right", "both", "narrow_left", "narrow_right", or "blocked".
+     */
+    private String getSmartAvoidance(JSObject zoneInfo) {
+        boolean leftClear   = zoneInfo.optBoolean("leftClear", true);
+        boolean rightClear  = zoneInfo.optBoolean("rightClear", true);
+        boolean leftNarrow  = zoneInfo.optBoolean("leftNarrow", false);
+        boolean rightNarrow = zoneInfo.optBoolean("rightNarrow", false);
+        double leftOcc      = zoneInfo.optDouble("leftOccupancy", 0.0);
+        double rightOcc     = zoneInfo.optDouble("rightOccupancy", 0.0);
+
+        if (leftClear && rightClear) {
+            // Both sides open — recommend the wider one
+            if (leftOcc < rightOcc - 0.10) return "left";
+            if (rightOcc < leftOcc - 0.10) return "right";
+            return "both";
+        }
+        if (leftClear && !rightClear)  return "left";
+        if (rightClear && !leftClear)  return "right";
+
+        // Neither side is fully clear
+        if (leftNarrow && !rightNarrow)  return "narrow_left";
+        if (rightNarrow && !leftNarrow)  return "narrow_right";
+        if (leftNarrow && rightNarrow) {
+            // Both narrow — pick the less occupied one
+            if (leftOcc < rightOcc) return "narrow_left";
+            return "narrow_right";
+        }
+
+        // Both sides blocked (>60% occupied)
         return "blocked";
     }
 
@@ -582,7 +661,27 @@ public class ObjectDetectionPlugin extends Plugin {
 
                 List<Detection> detections = postProcessTransposed(reusableOutput[0], confidenceThreshold);
 
-                Detection nearest = findNearestObject(detections);
+                // ===== 3-Zone Classification =====
+                // Classify each detection into LEFT, CENTER, or RIGHT zone
+                // based on bounding box center X position.
+                List<Detection> centerDetections = new ArrayList<>();
+                List<Detection> leftDetections   = new ArrayList<>();
+                List<Detection> rightDetections  = new ArrayList<>();
+
+                for (Detection det : detections) {
+                    if (det.className.equals("window")) continue;
+                    float detCenterX = (det.x1 + det.x2) / 2f;
+                    String zone = getDirection(detCenterX, INPUT_SIZE);
+                    if (zone.equals("ahead"))          centerDetections.add(det);
+                    else if (zone.equals("left side")) leftDetections.add(det);
+                    else                               rightDetections.add(det);
+                }
+
+                // Find nearest threat in CENTER zone only (for TTS alerts)
+                Detection nearest = findNearestObject(centerDetections);
+
+                // Compute LEFT/RIGHT zone spatial clearance (for avoidance guidance)
+                JSObject zoneInfo = computeZoneClearance(leftDetections, rightDetections);
 
                 JSObject ret = new JSObject();
                 if (nearest != null) {
@@ -599,7 +698,7 @@ public class ObjectDetectionPlugin extends Plugin {
 
                     String distance  = imminent ? "imminent" : estimateDistance(bboxArea, frameArea);
                     String direction = getDirection((nearest.x1 + nearest.x2) / 2, INPUT_SIZE);
-                    String avoidance = getAvoidanceDirection(nearest.x1, nearest.x2, INPUT_SIZE);
+                    String avoidance = getSmartAvoidance(zoneInfo);
                     float  centerX   = (nearest.x1 + nearest.x2) / 2f;
                     boolean stable   = isDetectionStable(nearest.className);
 
@@ -624,6 +723,9 @@ public class ObjectDetectionPlugin extends Plugin {
                 } else {
                     pushClassHistory("none", 0f, 0f);
                 }
+
+                // Include zone spatial data for JS-side guidance decisions
+                ret.put("zones", zoneInfo);
 
                 ret.put("success", true);
                 ret.put("activeCamera", activeCamera);
@@ -1035,13 +1137,7 @@ public class ObjectDetectionPlugin extends Plugin {
             if (det.className.equals("window")) continue;
 
             float rawArea = (det.x2 - det.x1) * (det.y2 - det.y1);
-            float scaledArea = rawArea * getScaleMultiplier(det.className);
-
-            float centerX = (det.x1 + det.x2) / 2f;
-            String dir = getDirection(centerX, INPUT_SIZE);
-            float directionalMultiplier = dir.equals("ahead") ? 2.0f : 1.0f;
-
-            float threatScore = scaledArea * directionalMultiplier;
+            float threatScore = rawArea * getScaleMultiplier(det.className);
 
             if (threatScore > maxThreatScore) {
                 maxThreatScore = threatScore;

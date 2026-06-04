@@ -657,6 +657,7 @@ const startDetection = () => {
         nearestObject.value = result.nearest;
 
         const { class: objClass, distance, direction, avoidance } = result.nearest;
+        const zones = result.zones || {};
         const isImminent = distance === 'imminent';
         const tier = getClassTier(objClass);
         const canSpeak = canSpeakClass(tier, objClass, now);
@@ -681,37 +682,34 @@ const startDetection = () => {
             let ttsRate2 = 0.9;
 
             if (isImminent) {
-              const locationPhrase = direction === 'ahead'
-                  ? 'directly ahead'
-                  : `on your ${direction}`;
-              
-              msg = `Warning! ${objClass} ${locationPhrase}, stop!`;
+              msg = `Warning! ${objClass} directly ahead, stop!`;
               ttsRate = 1.25;
 
               if (avoidance === 'blocked') {
-                msg2 = `Path is blocked. Slowly turn left or right to find a clear path.`;
+                msg2 = `Path is blocked on both sides. Slowly turn around to find a clear path.`;
               } else if (avoidance === 'left') {
-                msg2 = `Move to your left.`;
+                msg2 = `Your left side is clear. Step to your left.`;
               } else if (avoidance === 'right') {
-                msg2 = `Move to your right.`;
+                msg2 = `Your right side is clear. Step to your right.`;
               } else if (avoidance === 'both') {
-                msg2 = `Move left or right.`;
+                msg2 = `Both sides are clear. Step left or right.`;
+              } else if (avoidance === 'narrow_left') {
+                const leftObs = zones.leftObstacle || '';
+                msg2 = `Caution, narrow path on your left${leftObs ? ' near ' + leftObs : ''}. Proceed carefully to the left.`;
+              } else if (avoidance === 'narrow_right') {
+                const rightObs = zones.rightObstacle || '';
+                msg2 = `Caution, narrow path on your right${rightObs ? ' near ' + rightObs : ''}. Proceed carefully to the right.`;
               }
             } else {
-              const locationPhrase = direction === 'ahead'
-                  ? 'ahead'
-                  : `on your ${direction}`;
-
               let guidancePhrase = '';
-              if (direction === 'ahead' && avoidance && avoidance !== 'blocked') {
-                if (avoidance === 'left')       guidancePhrase = '. Move to your left.';
-                else if (avoidance === 'right') guidancePhrase = '. Move to your right.';
-                else if (avoidance === 'both')  guidancePhrase = '. Move left or right.';
-              } else if (direction === 'ahead' && avoidance === 'blocked') {
-                guidancePhrase = '. Path is blocked. Slowly turn left or right to find a clear path.';
-              }
+              if (avoidance === 'left')              guidancePhrase = '. Your left is clear, move left.';
+              else if (avoidance === 'right')        guidancePhrase = '. Your right is clear, move right.';
+              else if (avoidance === 'both')         guidancePhrase = '. Both sides clear, move left or right.';
+              else if (avoidance === 'narrow_left')  guidancePhrase = '. Narrow path on left, proceed carefully left.';
+              else if (avoidance === 'narrow_right') guidancePhrase = '. Narrow path on right, proceed carefully right.';
+              else if (avoidance === 'blocked')      guidancePhrase = '. Path blocked ahead. Stop and turn around.';
 
-              msg = `${objClass} ${distance} ${locationPhrase}${guidancePhrase}`;
+              msg = `${objClass} ${distance} ahead${guidancePhrase}`;
               ttsRate = 0.9;
             }
 
@@ -820,11 +818,15 @@ const canSpeakClass = (tier, className, now) => {
 };
 
 const shouldSpeakAlert = (tier, direction, distance, isImminent) => {
+  // CRITICAL: Only announce obstacles that are in the CENTER zone (ahead)
+  // Java now only returns CENTER detections as 'nearest', but this is a safety net.
+  if (direction !== 'ahead' && !isImminent) return false;
+
   if (isImminent) return true;
   if (tier === 'tier1') return distance !== 'far';
-  if (tier === 'tier2') return direction === 'ahead' || distance === 'very close';
-  if (tier === 'tier3') return direction === 'ahead' && distance !== 'far';
-  return direction === 'ahead' && (distance === 'close' || distance === 'very close');
+  if (tier === 'tier2') return distance !== 'far';
+  if (tier === 'tier3') return distance !== 'far';
+  return distance === 'close' || distance === 'very close';
 };
 
 const updatePerfMetrics = (metrics) => {
