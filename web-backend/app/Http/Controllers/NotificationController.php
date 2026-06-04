@@ -93,11 +93,9 @@ class NotificationController extends Controller
                     ])
                     ->withAndroidConfig([
                         'priority' => 'high',
-                        'collapse_key' => 'distress',
                         'notification' => [
                             'sound' => 'alert',
                             'channel_id' => 'emergency_alerts_v2',
-                            'tag' => 'distress_alert',
                         ]
                     ])
                     ->withApnsConfig([
