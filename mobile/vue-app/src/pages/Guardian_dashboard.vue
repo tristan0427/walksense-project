@@ -324,6 +324,10 @@ onMounted(async () => {
   }, 10000)
 
   await setupPushAlerts();
+
+  if (Capacitor.getPlatform() !== 'web') {
+    PushNotifications.removeAllDeliveredNotifications();
+  }
 })
 
 onUnmounted(() => {
@@ -468,6 +472,9 @@ const deleteNotification = async (id) => {
     await axios.delete(`/api/notifications/${id}`)
     notifications.value = notifications.value.filter(n => n.id !== id)
     clearSOSView()
+    if (Capacitor.getPlatform() !== 'web') {
+      PushNotifications.removeAllDeliveredNotifications();
+    }
   } catch (err) {
     console.error('Failed to delete notification:', err)
   }
@@ -476,6 +483,9 @@ const deleteNotification = async (id) => {
 const acknowledgeNotification = async (id) => {
   try {
     await axios.patch(`/api/notifications/${id}/acknowledge`)
+    if (Capacitor.getPlatform() !== 'web') {
+      PushNotifications.removeAllDeliveredNotifications();
+    }
   } catch (err) {
     console.error('Failed to acknowledge notification:', err)
   }
