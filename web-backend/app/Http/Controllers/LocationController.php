@@ -41,19 +41,17 @@ class LocationController extends Controller
             
             $recordedAt = $request->input('recorded_at') ? \Carbon\Carbon::parse($request->input('recorded_at'))->setTimezone('UTC') : now();
 
-            if (!$isStationary) {
-                $location = Location::create([
-                    'user_id' => $user->id,
-                    'latitude' => $validated['latitude'],
-                    'longitude' => $validated['longitude'],
-                    'accuracy' => $validated['accuracy'] ?? null,
-                    'altitude' => $validated['altitude'] ?? null,
-                    'speed' => $validated['speed'] ?? null,
-                    'heading' => $validated['heading'] ?? null,
-                    'battery_level' => $validated['battery_level'] ?? null,
-                    'recorded_at' => $recordedAt,
-                ]);
-            }
+            $location = Location::create([
+                'user_id' => $user->id,
+                'latitude' => $validated['latitude'],
+                'longitude' => $validated['longitude'],
+                'accuracy' => $validated['accuracy'] ?? null,
+                'altitude' => $validated['altitude'] ?? null,
+                'speed' => $validated['speed'] ?? null,
+                'heading' => $validated['heading'] ?? null,
+                'battery_level' => $validated['battery_level'] ?? null,
+                'recorded_at' => $recordedAt,
+            ]);
 
             CurrentLocation::updateOrCreate(
                 ['user_id' => $user->id],
