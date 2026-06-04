@@ -82,6 +82,15 @@ const customHistoryDate = ref('')
 const playbackIndex = ref(0)
 const isPlaying = ref(false)
 let playbackInterval = null
+const snapToRoads = ref(false)
+
+const toggleSnapToRoads = async () => {
+  snapToRoads.value = !snapToRoads.value
+  pausePlayback()
+  cleanupHistoryMap()
+  await nextTick()
+  initHistoryMap()
+}
 
 const historyMap = ref(null)
 const historyPolyline = ref(null)
@@ -170,7 +179,7 @@ const fetchHistoryData = async () => {
   }
 }
 
-const initHistoryMap = () => {
+const initHistoryMap = async () => {
   const container = document.getElementById('historyMapContainer')
   if (!container) return
   
@@ -183,9 +192,29 @@ const initHistoryMap = () => {
     maxZoom: 20,
   }).addTo(historyMap.value)
   
-  const latlngs = historyLocations.value.map(loc => [parseFloat(loc.latitude), parseFloat(loc.longitude)])
+  const rawLatLngs = historyLocations.value.map(loc => [parseFloat(loc.latitude), parseFloat(loc.longitude)])
+  let mapLatLngs = rawLatLngs;
+
+  if (snapToRoads.value && rawLatLngs.length >= 2) {
+      try {
+          let coordsToSnap = rawLatLngs;
+          if (coordsToSnap.length > 90) {
+              const step = Math.ceil(coordsToSnap.length / 90);
+              coordsToSnap = coordsToSnap.filter((_, i) => i % step === 0 || i === coordsToSnap.length - 1);
+          }
+          const coordString = coordsToSnap.map(ll => `${ll[1]},${ll[0]}`).join(';');
+          const response = await axios.get(`https://router.project-osrm.org/route/v1/foot/${coordString}?overview=full&geometries=geojson`);
+          
+          if (response.data && response.data.routes && response.data.routes.length > 0) {
+              const geojsonCoords = response.data.routes[0].geometry.coordinates;
+              mapLatLngs = geojsonCoords.map(c => [c[1], c[0]]);
+          }
+      } catch (err) {
+          console.error("OSRM snap to roads failed:", err);
+      }
+  }
   
-  historyPolyline.value = L.polyline(latlngs, {
+  historyPolyline.value = L.polyline(mapLatLngs, {
     color: '#f59e0b',
     weight: 4,
     opacity: 0.8,
@@ -193,7 +222,7 @@ const initHistoryMap = () => {
     lineJoin: 'round'
   }).addTo(historyMap.value)
   
-  historyMap.value.fitBounds(historyPolyline.value.getBounds(), { padding: [20, 20] })
+  historyMap.value.fitBounds(historyPolyline.value.getBounds(), { padding: [20, 20], maxZoom: 16 })
 
   const createDotIcon = (color) => L.divIcon({
     className: '',
@@ -202,10 +231,10 @@ const initHistoryMap = () => {
     iconAnchor: [8, 8]
   })
 
-  historyStartMarker.value = L.marker(latlngs[0], { icon: createDotIcon('#10b981') }).addTo(historyMap.value)
-  historyEndMarker.value = L.marker(latlngs[latlngs.length - 1], { icon: normalIcon }).addTo(historyMap.value)
+  historyStartMarker.value = L.marker(rawLatLngs[0], { icon: createDotIcon('#10b981') }).addTo(historyMap.value)
+  historyEndMarker.value = L.marker(rawLatLngs[rawLatLngs.length - 1], { icon: normalIcon }).addTo(historyMap.value)
   
-  historyPlaybackMarker.value = L.marker(latlngs[0], { 
+  historyPlaybackMarker.value = L.marker(rawLatLngs[0], { 
     icon: createDotIcon('#3b82f6'),
     zIndexOffset: 1000
   }).addTo(historyMap.value)
@@ -1225,7 +1254,14 @@ const setupPushAlerts = async () => {
               <!-- Playback Controls -->
               <div class="px-5 py-4 border-b border-gray-100 bg-white shrink-0">
                 <div class="flex items-center justify-between mb-2">
-                  <p class="text-xs font-bold text-gray-700">Route Playback</p>
+                  <div class="flex items-center gap-2">
+                    <p class="text-xs font-bold text-gray-700">Route Playback</p>
+                    <button @click="toggleSnapToRoads" class="flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold transition-colors"
+                      :class="snapToRoads ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-500'">
+                      <svg v-if="snapToRoads" class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path></svg>
+                      Snap to Roads
+                    </button>
+                  </div>
                   <p class="text-xs font-black text-[#5a3e00] bg-[#f7d686] px-2 py-0.5 rounded-md">
                     {{ formatTime(historyLocations[playbackIndex].recorded_at) }}
                   </p>

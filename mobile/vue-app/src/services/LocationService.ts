@@ -30,6 +30,7 @@ class LocationService {
     private lastLongitude: number | null = null;
     private lastSentTime: number = 0;
     private heartbeatTimer: any = null;
+    private isSyncing = false;
 
     /**
      * Start background location tracking
@@ -256,6 +257,7 @@ class LocationService {
      * Send location update to backend
      */
     private async sendLocationUpdate(location: BackgroundLocation): Promise<void> {
+        let payload: any = null;
         try {
             if (this.debugLogs) {
                 console.log('Sending location to server...');
@@ -299,7 +301,7 @@ class LocationService {
                 isStationary = (location.speed ?? 0) < 0.2;
             }
 
-            const payload = {
+            payload = {
                 latitude: location.latitude,
                 longitude: location.longitude,
                 accuracy: location.accuracy,
@@ -308,6 +310,7 @@ class LocationService {
                 heading: location.bearing,
                 battery_level: batteryLevel,
                 is_stationary: isStationary,
+                recorded_at: new Date().toISOString(),
             };
 
             if (this.debugLogs) {
@@ -336,6 +339,9 @@ class LocationService {
                 if (this.debugLogs) {
                     console.log('Location sent successfully:', response.data);
                 }
+                
+                // Attempt to sync any cached locations now that we are online
+                this.syncCachedLocations();
             } else {
                 throw new Error(`HTTP ${response.status}: Failed to send location`);
             }
@@ -344,6 +350,82 @@ class LocationService {
                 message: error.message || 'Unknown error',
                 details: error
             });
+            
+            if (payload) {
+                this.cacheLocation(payload);
+            }
+        }
+    }
+
+    /**
+     * Cache the location locally when offline
+     */
+    private cacheLocation(payload: any) {
+        try {
+            const cache = JSON.parse(localStorage.getItem('offline_locations') || '[]');
+            cache.push(payload);
+            // Limit cache size to prevent local storage overflow
+            if (cache.length > 500) cache.shift();
+            localStorage.setItem('offline_locations', JSON.stringify(cache));
+            if (this.debugLogs) {
+                console.log('Location cached locally. Total cached:', cache.length);
+            }
+        } catch (e) {
+            console.error('Failed to cache location:', e);
+        }
+    }
+
+    /**
+     * Sync cached locations when online
+     */
+    private async syncCachedLocations() {
+        if (this.isSyncing) return;
+        
+        try {
+            const cache = JSON.parse(localStorage.getItem('offline_locations') || '[]');
+            if (cache.length === 0) return;
+
+            this.isSyncing = true;
+            if (this.debugLogs) {
+                console.log(`Syncing ${cache.length} cached locations...`);
+            }
+
+            const token = localStorage.getItem('token');
+            const endpoint = (axios.defaults.baseURL || '') + '/api/location';
+            const remainingCache = [...cache];
+
+            for (const payload of cache) {
+                try {
+                    const response = await CapacitorHttp.post({
+                        url: endpoint,
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json',
+                            'Accept': 'application/json',
+                        },
+                        data: payload,
+                        connectTimeout: 5000,
+                        readTimeout: 5000,
+                    });
+
+                    if (response.status >= 200 && response.status < 300) {
+                        remainingCache.shift();
+                    } else {
+                        break;
+                    }
+                } catch (e) {
+                    break;
+                }
+            }
+
+            localStorage.setItem('offline_locations', JSON.stringify(remainingCache));
+            if (this.debugLogs) {
+                console.log(`Sync finished. Remaining in cache: ${remainingCache.length}`);
+            }
+        } catch (e) {
+            console.error('Failed to sync cached locations:', e);
+        } finally {
+            this.isSyncing = false;
         }
     }
 

@@ -28,6 +28,7 @@ class LocationController extends Controller
             'heading' => ['nullable', 'numeric', 'between:0,360'],
             'battery_level' => ['nullable', 'integer', 'between:0,100'],
             'is_stationary' => ['nullable', 'boolean'],
+            'recorded_at' => ['nullable', 'date'],
         ]);
 
         $user = Auth::user();
@@ -37,6 +38,8 @@ class LocationController extends Controller
 
             $isStationary = $request->input('is_stationary', false);
             $location = null;
+            
+            $recordedAt = $request->input('recorded_at') ? \Carbon\Carbon::parse($request->input('recorded_at'))->setTimezone('UTC') : now();
 
             if (!$isStationary) {
                 $location = Location::create([
@@ -48,7 +51,7 @@ class LocationController extends Controller
                     'speed' => $validated['speed'] ?? null,
                     'heading' => $validated['heading'] ?? null,
                     'battery_level' => $validated['battery_level'] ?? null,
-                    'recorded_at' => now(),
+                    'recorded_at' => $recordedAt,
                 ]);
             }
 
