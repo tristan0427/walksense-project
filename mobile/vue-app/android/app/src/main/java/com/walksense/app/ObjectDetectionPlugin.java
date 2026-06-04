@@ -180,7 +180,7 @@ public class ObjectDetectionPlugin extends Plugin {
         }
         return null;
     }
- 
+
     private void pushClassHistory(String className, float bboxRatio, float centerX) {
         classHistory.add(className);
         ratioHistory.add(bboxRatio);
