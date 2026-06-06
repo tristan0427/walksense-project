@@ -25,6 +25,7 @@ import java.nio.MappedByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
@@ -101,6 +102,19 @@ public class ObjectDetectionPlugin extends Plugin {
     private ScheduledExecutorService previewExecutor;
     private ScheduledFuture<?> previewTask;
     private volatile boolean demoModeActive = false;
+
+    // ===== Temporal Zone Memory =====
+    private static final int ZONE_MEMORY_FRAMES = 15;
+    private LinkedList<Float> leftOccupancyHistory = new LinkedList<>();
+    private LinkedList<Float> rightOccupancyHistory = new LinkedList<>();
+
+    private float getMaxOccupancy(LinkedList<Float> history) {
+        float max = 0f;
+        for (float occ : history) {
+            if (occ > max) max = occ;
+        }
+        return max;
+    }
 
     // ===== Temporal Tracking (close-proximity misclassification fix) =====
     private static final int CLASS_HISTORY_SIZE = 12;
@@ -270,32 +284,46 @@ public class ObjectDetectionPlugin extends Plugin {
      * Returns a JSObject with clearance flags and occupancy values.
      * <20% occupied = "clear", 20-60% = "narrow", >60% = "blocked"
      */
-    private JSObject computeZoneClearance(List<Detection> leftDets, List<Detection> rightDets) {
+    private JSObject computeZoneClearance(List<Detection> allDets) {
         JSObject info = new JSObject();
 
         float leftBound  = INPUT_SIZE * CENTER_LEFT_BOUNDARY;   // 80px
         float rightBound = INPUT_SIZE * CENTER_RIGHT_BOUNDARY;  // 240px
 
-        // LEFT zone: 0 to leftBound (80px wide)
-        float leftOccupancy  = computeZoneOccupancy(leftDets, 0, leftBound);
-        // RIGHT zone: rightBound to INPUT_SIZE (80px wide)
-        float rightOccupancy = computeZoneOccupancy(rightDets, rightBound, INPUT_SIZE);
+        // 1. Calculate INSTANTANEOUS occupancy for the current frame
+        float currentLeftOcc  = computeZoneOccupancy(allDets, 0, leftBound);
+        float currentRightOcc = computeZoneOccupancy(allDets, rightBound, INPUT_SIZE);
 
-        // Determine clearance labels
-        info.put("leftClear",      leftOccupancy < 0.20f);
-        info.put("rightClear",     rightOccupancy < 0.20f);
-        info.put("leftNarrow",     leftOccupancy >= 0.20f && leftOccupancy < 0.60f);
-        info.put("rightNarrow",    rightOccupancy >= 0.20f && rightOccupancy < 0.60f);
-        info.put("leftOccupancy",  leftOccupancy);
-        info.put("rightOccupancy", rightOccupancy);
+        // 2. Update memory buffers
+        leftOccupancyHistory.addLast(currentLeftOcc);
+        if (leftOccupancyHistory.size() > ZONE_MEMORY_FRAMES) leftOccupancyHistory.removeFirst();
 
-        // Identify what's blocking each side (for informative TTS)
-        if (!leftDets.isEmpty()) {
-            info.put("leftObstacle", leftDets.get(0).className);
+        rightOccupancyHistory.addLast(currentRightOcc);
+        if (rightOccupancyHistory.size() > ZONE_MEMORY_FRAMES) rightOccupancyHistory.removeFirst();
+
+        // 3. Use HISTORICAL MAXIMUM for safety
+        float safeLeftOcc = getMaxOccupancy(leftOccupancyHistory);
+        float safeRightOcc = getMaxOccupancy(rightOccupancyHistory);
+
+        // 4. Determine clearance labels based on SAFE occupancy
+        info.put("leftClear",      safeLeftOcc < 0.20f);
+        info.put("rightClear",     safeRightOcc < 0.20f);
+        info.put("leftNarrow",     safeLeftOcc >= 0.20f && safeLeftOcc < 0.60f);
+        info.put("rightNarrow",    safeRightOcc >= 0.20f && safeRightOcc < 0.60f);
+        info.put("leftOccupancy",  safeLeftOcc);
+        info.put("rightOccupancy", safeRightOcc);
+
+        // Dynamically identify what's blocking each side
+        String leftObstacle = null;
+        String rightObstacle = null;
+        for (Detection det : allDets) {
+            if (det.className.equals("window")) continue;
+            if (det.x1 < leftBound && leftObstacle == null) leftObstacle = det.className;
+            if (det.x2 > rightBound && rightObstacle == null) rightObstacle = det.className;
         }
-        if (!rightDets.isEmpty()) {
-            info.put("rightObstacle", rightDets.get(0).className);
-        }
+
+        if (leftObstacle != null) info.put("leftObstacle", leftObstacle);
+        if (rightObstacle != null) info.put("rightObstacle", rightObstacle);
 
         return info;
     }
@@ -304,7 +332,7 @@ public class ObjectDetectionPlugin extends Plugin {
      * Zone-aware avoidance: uses actual LEFT/RIGHT zone occupancy instead of pixel gaps.
      * Returns: "left", "right", "both", "narrow_left", "narrow_right", or "blocked".
      */
-    private String getSmartAvoidance(JSObject zoneInfo) {
+    private String getSmartAvoidance(JSObject zoneInfo, float bboxRatio) {
         boolean leftClear   = zoneInfo.optBoolean("leftClear", true);
         boolean rightClear  = zoneInfo.optBoolean("rightClear", true);
         boolean leftNarrow  = zoneInfo.optBoolean("leftNarrow", false);
@@ -330,6 +358,11 @@ public class ObjectDetectionPlugin extends Plugin {
             return "narrow_right";
         }
 
+        // Camera Blindness Check (80% frame coverage)
+        if (bboxRatio >= 0.80f) {
+            return (leftOcc < rightOcc) ? "left" : "right";
+        }
+
         // Both sides blocked (>60% occupied)
         return "blocked";
     }
@@ -341,7 +374,7 @@ public class ObjectDetectionPlugin extends Plugin {
     public void loadModel(PluginCall call) {
         try {
             Log.d(TAG, "Loading TFLite model...");
-            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "v13_latest_best_float16.tflite");
+            MappedByteBuffer model = FileUtil.loadMappedFile(getContext(), "v14_latest_best_float16.tflite");
             Interpreter.Options options = new Interpreter.Options();
 
             // GPU acceleration with optimized CPU fallback
@@ -680,8 +713,8 @@ public class ObjectDetectionPlugin extends Plugin {
                 // Find nearest threat in CENTER zone only (for TTS alerts)
                 Detection nearest = findNearestObject(centerDetections);
 
-                // Compute LEFT/RIGHT zone spatial clearance (for avoidance guidance)
-                JSObject zoneInfo = computeZoneClearance(leftDetections, rightDetections);
+                // Compute LEFT/RIGHT zone spatial clearance using ALL detections (for true box-overlap guidance)
+                JSObject zoneInfo = computeZoneClearance(detections);
 
                 JSObject ret = new JSObject();
                 if (nearest != null) {
@@ -698,7 +731,7 @@ public class ObjectDetectionPlugin extends Plugin {
 
                     String distance  = imminent ? "imminent" : estimateDistance(bboxArea, frameArea);
                     String direction = getDirection((nearest.x1 + nearest.x2) / 2, INPUT_SIZE);
-                    String avoidance = getSmartAvoidance(zoneInfo);
+                    String avoidance = getSmartAvoidance(zoneInfo, bboxRatio);
                     float  centerX   = (nearest.x1 + nearest.x2) / 2f;
                     boolean stable   = isDetectionStable(nearest.className);
 

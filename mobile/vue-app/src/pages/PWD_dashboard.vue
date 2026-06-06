@@ -142,6 +142,13 @@ const stationaryAnnouncedClasses = new Set();
 let unstableStartTime = null;
 const UNSTABLE_DEBOUNCE_MS = 3000;
 
+// ── Anti-Ping-Pong Tracking ──────────────────────────────────────────────────
+const guidanceHistory = {
+  lastDirection: null,
+  timestamp: 0
+};
+const PING_PONG_COOLDOWN_MS = 4000;
+
 // ── Demo Mode ────────────────────────────────────────────────────────────────
 // Shows camera preview + bounding box overlay when ON. Zero overhead when OFF.
 const demoMode = ref(false);
@@ -656,11 +663,27 @@ const startDetection = () => {
         clearPathSince = null;
         nearestObject.value = result.nearest;
 
-        const { class: objClass, distance, direction, avoidance } = result.nearest;
+        let { class: objClass, distance, direction, avoidance } = result.nearest;
         const zones = result.zones || {};
         const isImminent = distance === 'imminent';
         const tier = getClassTier(objClass);
         const canSpeak = canSpeakClass(tier, objClass, now);
+
+        // Anti-Ping-Pong Logic
+        if (now - guidanceHistory.timestamp < PING_PONG_COOLDOWN_MS) {
+          if (avoidance === 'left' && guidanceHistory.lastDirection === 'right') {
+            avoidance = zones.rightClear ? 'right' : 'blocked'; 
+          } else if (avoidance === 'right' && guidanceHistory.lastDirection === 'left') {
+            avoidance = zones.leftClear ? 'left' : 'blocked';
+          }
+        }
+
+        if (avoidance === 'left' || avoidance === 'right') {
+          guidanceHistory.lastDirection = avoidance;
+          guidanceHistory.timestamp = now;
+        } else if (avoidance === 'blocked') {
+          guidanceHistory.lastDirection = null;
+        }
         
         const lastClassSpokenAt = lastSpokenByClass.get(objClass) || 0;
         const imminentCanSpeak = (now - lastClassSpokenAt) >= IMMINENT_COOLDOWN_MS;
@@ -686,13 +709,13 @@ const startDetection = () => {
               ttsRate = 1.25;
 
               if (avoidance === 'blocked') {
-                msg2 = `Path is blocked on both sides. Slowly turn around to find a clear path.`;
+                msg2 = `Path is blocked on both sides. Stop and turn around.`;
               } else if (avoidance === 'left') {
-                msg2 = `Your left side is clear. Step to your left.`;
+                msg2 = `Your left side is clear. Turn left.`;
               } else if (avoidance === 'right') {
-                msg2 = `Your right side is clear. Step to your right.`;
+                msg2 = `Your right side is clear. Turn right.`;
               } else if (avoidance === 'both') {
-                msg2 = `Both sides are clear. Step left or right.`;
+                msg2 = `Both sides are clear. Turn left or right.`;
               } else if (avoidance === 'narrow_left') {
                 const leftObs = zones.leftObstacle || '';
                 msg2 = `Caution, narrow path on your left${leftObs ? ' near ' + leftObs : ''}. Proceed carefully to the left.`;
@@ -702,9 +725,9 @@ const startDetection = () => {
               }
             } else {
               let guidancePhrase = '';
-              if (avoidance === 'left')              guidancePhrase = '. Your left is clear, move left.';
-              else if (avoidance === 'right')        guidancePhrase = '. Your right is clear, move right.';
-              else if (avoidance === 'both')         guidancePhrase = '. Both sides clear, move left or right.';
+              if (avoidance === 'left')              guidancePhrase = '. Your left is clear, step to the left.';
+              else if (avoidance === 'right')        guidancePhrase = '. Your right is clear, step to the right.';
+              else if (avoidance === 'both')         guidancePhrase = '. Both sides clear, step left or right.';
               else if (avoidance === 'narrow_left')  guidancePhrase = '. Narrow path on left, proceed carefully left.';
               else if (avoidance === 'narrow_right') guidancePhrase = '. Narrow path on right, proceed carefully right.';
               else if (avoidance === 'blocked')      guidancePhrase = '. Path blocked ahead. Stop and turn around.';
@@ -767,7 +790,7 @@ const startDetection = () => {
         }
 
         const elapsedClearTime = Date.now() - clearPathSince;
-        if (elapsedClearTime >= 1500) {
+        if (elapsedClearTime >= 1000) {
           if (!isPathClearAnnounced.value && !isSpeaking.value && !isDistressSpeaking.value) {
             isSpeaking.value = true;
             isPathClearAnnounced.value = true;
