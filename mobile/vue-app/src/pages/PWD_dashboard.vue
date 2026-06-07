@@ -148,6 +148,7 @@ const guidanceHistory = {
   timestamp: 0
 };
 const PING_PONG_COOLDOWN_MS = 4000;
+const waitingForChoiceTurn = ref(false);
 
 // ── Demo Mode ────────────────────────────────────────────────────────────────
 // Shows camera preview + bounding box overlay when ON. Zero overhead when OFF.
@@ -658,7 +659,30 @@ const startDetection = () => {
       updatePerfMetrics(result.metrics);
       const now = Date.now();
 
-      if (result.nearest) {
+      // Optical choice-turn detection for Anti-Ping-Pong
+      if (waitingForChoiceTurn.value && result.zones) {
+        const leftOcc = result.zones.leftOccupancy || 0;
+        const rightOcc = result.zones.rightOccupancy || 0;
+
+        if (rightOcc > 0.40 && leftOcc < 0.20) {
+          // Obstacle swept to the right side -> user turned Left
+          guidanceHistory.lastDirection = 'left';
+          guidanceHistory.timestamp = now;
+          waitingForChoiceTurn.value = false;
+        } else if (leftOcc > 0.40 && rightOcc < 0.20) {
+          // Obstacle swept to the left side -> user turned Right
+          guidanceHistory.lastDirection = 'right';
+          guidanceHistory.timestamp = now;
+          waitingForChoiceTurn.value = false;
+        }
+      }
+
+      const hasCriticalThreat = result.nearest && 
+        (result.nearest.distance === 'imminent' || 
+         result.nearest.distance === 'close' || 
+         result.nearest.distance === 'very close');
+
+      if (hasCriticalThreat) {
         isPathClearAnnounced.value = false;
         clearPathSince = null;
         nearestObject.value = result.nearest;
@@ -678,11 +702,29 @@ const startDetection = () => {
           }
         }
 
+        // Non-Blocking Classes Override
+        if (avoidance === 'blocked') {
+          const nonBlockingClasses = new Set([
+            'chair', 'table', 'couch', 'cabinet', 'refrigerator', 'standing aircon',
+            'trash can', 'pole', 'tree', 'bench', 'bollards', 'person', 'dog',
+            'pothole', 'puddle'
+          ]);
+
+          if (nonBlockingClasses.has(objClass)) {
+            const leftOcc = zones.leftOccupancy || 0;
+            const rightOcc = zones.rightOccupancy || 0;
+            // Guide the user to the side with lower occupancy
+            avoidance = (leftOcc <= rightOcc) ? 'left' : 'right';
+          }
+        }
+
         if (avoidance === 'left' || avoidance === 'right') {
           guidanceHistory.lastDirection = avoidance;
           guidanceHistory.timestamp = now;
+          waitingForChoiceTurn.value = false;
         } else if (avoidance === 'blocked') {
           guidanceHistory.lastDirection = null;
+          waitingForChoiceTurn.value = true;
         }
         
         const lastClassSpokenAt = lastSpokenByClass.get(objClass) || 0;
@@ -709,7 +751,7 @@ const startDetection = () => {
               ttsRate = 1.25;
 
               if (avoidance === 'blocked') {
-                msg2 = `Path is blocked on both sides. Stop and turn around.`;
+                msg2 = `Path is blocked on both sides. Turn left or right.`;
               } else if (avoidance === 'left') {
                 msg2 = `Your left side is clear. Turn left.`;
               } else if (avoidance === 'right') {
@@ -725,12 +767,14 @@ const startDetection = () => {
               }
             } else {
               let guidancePhrase = '';
-              if (avoidance === 'left')              guidancePhrase = '. Your left is clear, step to the left.';
-              else if (avoidance === 'right')        guidancePhrase = '. Your right is clear, step to the right.';
-              else if (avoidance === 'both')         guidancePhrase = '. Both sides clear, step left or right.';
-              else if (avoidance === 'narrow_left')  guidancePhrase = '. Narrow path on left, proceed carefully left.';
-              else if (avoidance === 'narrow_right') guidancePhrase = '. Narrow path on right, proceed carefully right.';
-              else if (avoidance === 'blocked')      guidancePhrase = '. Path blocked ahead. Stop and turn around.';
+              if (distance === 'close' || distance === 'very close') {
+                if (avoidance === 'left')              guidancePhrase = '. Your left is clear, step to the left.';
+                else if (avoidance === 'right')        guidancePhrase = '. Your right is clear, step to the right.';
+                else if (avoidance === 'both')         guidancePhrase = '. Both sides clear, step left or right.';
+                else if (avoidance === 'narrow_left')  guidancePhrase = '. Narrow path on left, proceed carefully left.';
+                else if (avoidance === 'narrow_right') guidancePhrase = '. Narrow path on right, proceed carefully right.';
+                else if (avoidance === 'blocked')      guidancePhrase = '. Path blocked ahead. Turn left or right.';
+              }
 
               msg = `${objClass} ${distance} ahead${guidancePhrase}`;
               ttsRate = 0.9;
@@ -777,7 +821,7 @@ const startDetection = () => {
           }
         }
       } else {
-        nearestObject.value = null;
+        nearestObject.value = result.nearest;
 
         if (unstableStartTime === null) {
           unstableStartTime = now;
@@ -806,6 +850,59 @@ const startDetection = () => {
             }).finally(() => {
               isSpeaking.value = false;
             });
+          } else if (isPathClearAnnounced.value && result.nearest && !isSpeaking.value) {
+            // "Clear ahead" was already announced. We can now warn about the medium/far obstacle.
+            let { class: objClass, distance, direction, avoidance } = result.nearest;
+            const zones = result.zones || {};
+            const tier = getClassTier(objClass);
+            const canSpeak = canSpeakClass(tier, objClass, now);
+
+            // Apply overrides in case of blocked state
+            if (avoidance === 'blocked') {
+              const nonBlockingClasses = new Set([
+                'chair', 'table', 'couch', 'cabinet', 'refrigerator', 'standing aircon',
+                'trash can', 'pole', 'tree', 'bench', 'bollards', 'person', 'dog',
+                'pothole', 'puddle'
+              ]);
+
+              if (nonBlockingClasses.has(objClass)) {
+                const leftOcc = zones.leftOccupancy || 0;
+                const rightOcc = zones.rightOccupancy || 0;
+                avoidance = (leftOcc <= rightOcc) ? 'left' : 'right';
+              }
+            }
+
+            const suppressionKey = `${objClass}::${distance}`;
+            if (stationaryAnnouncedClasses.has(suppressionKey)) {
+              return;
+            }
+
+            if (canSpeak && !isDistressSpeaking.value) {
+              const shouldSpeak = shouldSpeakAlert(tier, direction, distance, false);
+              if (shouldSpeak) {
+                // Non-critical alert has no steering guidance phrase
+                let msg = `${objClass} ${distance} ahead`;
+
+                isSpeaking.value = true;
+                currentSpokenClass.value = objClass;
+                stationaryAnnouncedClasses.add(suppressionKey);
+                lastSpokenTime.value = Date.now();
+                lastSpokenByClass.set(objClass, lastSpokenTime.value);
+
+                TextToSpeech.speak({
+                  text: msg,
+                  lang: 'en-US',
+                  rate: 0.9,
+                  pitch: 1.0,
+                  volume: 1.0
+                }).catch((ttsError) => {
+                  console.error('TTS error:', ttsError);
+                }).finally(() => {
+                  isSpeaking.value = false;
+                  currentSpokenClass.value = null;
+                });
+              }
+            }
           }
         }
       }

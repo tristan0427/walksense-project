@@ -103,18 +103,7 @@ public class ObjectDetectionPlugin extends Plugin {
     private ScheduledFuture<?> previewTask;
     private volatile boolean demoModeActive = false;
 
-    // ===== Temporal Zone Memory =====
-    private static final int ZONE_MEMORY_FRAMES = 15;
-    private LinkedList<Float> leftOccupancyHistory = new LinkedList<>();
-    private LinkedList<Float> rightOccupancyHistory = new LinkedList<>();
 
-    private float getMaxOccupancy(LinkedList<Float> history) {
-        float max = 0f;
-        for (float occ : history) {
-            if (occ > max) max = occ;
-        }
-        return max;
-    }
 
     // ===== Temporal Tracking (close-proximity misclassification fix) =====
     private static final int CLASS_HISTORY_SIZE = 12;
@@ -291,27 +280,16 @@ public class ObjectDetectionPlugin extends Plugin {
         float rightBound = INPUT_SIZE * CENTER_RIGHT_BOUNDARY;  // 240px
 
         // 1. Calculate INSTANTANEOUS occupancy for the current frame
-        float currentLeftOcc  = computeZoneOccupancy(allDets, 0, leftBound);
-        float currentRightOcc = computeZoneOccupancy(allDets, rightBound, INPUT_SIZE);
+        float leftOcc  = computeZoneOccupancy(allDets, 0, leftBound);
+        float rightOcc = computeZoneOccupancy(allDets, rightBound, INPUT_SIZE);
 
-        // 2. Update memory buffers
-        leftOccupancyHistory.addLast(currentLeftOcc);
-        if (leftOccupancyHistory.size() > ZONE_MEMORY_FRAMES) leftOccupancyHistory.removeFirst();
-
-        rightOccupancyHistory.addLast(currentRightOcc);
-        if (rightOccupancyHistory.size() > ZONE_MEMORY_FRAMES) rightOccupancyHistory.removeFirst();
-
-        // 3. Use HISTORICAL MAXIMUM for safety
-        float safeLeftOcc = getMaxOccupancy(leftOccupancyHistory);
-        float safeRightOcc = getMaxOccupancy(rightOccupancyHistory);
-
-        // 4. Determine clearance labels based on SAFE occupancy
-        info.put("leftClear",      safeLeftOcc < 0.20f);
-        info.put("rightClear",     safeRightOcc < 0.20f);
-        info.put("leftNarrow",     safeLeftOcc >= 0.20f && safeLeftOcc < 0.60f);
-        info.put("rightNarrow",    safeRightOcc >= 0.20f && safeRightOcc < 0.60f);
-        info.put("leftOccupancy",  safeLeftOcc);
-        info.put("rightOccupancy", safeRightOcc);
+        // 2. Determine clearance labels based on CURRENT occupancy
+        info.put("leftClear",      leftOcc < 0.20f);
+        info.put("rightClear",     rightOcc < 0.20f);
+        info.put("leftNarrow",     leftOcc >= 0.20f && leftOcc < 0.60f);
+        info.put("rightNarrow",    rightOcc >= 0.20f && rightOcc < 0.60f);
+        info.put("leftOccupancy",  leftOcc);
+        info.put("rightOccupancy", rightOcc);
 
         // Dynamically identify what's blocking each side
         String leftObstacle = null;
